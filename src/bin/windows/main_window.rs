@@ -55,9 +55,9 @@ pub struct MainWindow {
 
 impl MainWindow {
     const IMAGE_SIZE: Vec2 = Vec2::new(250f32, 250f32);
-    const MARGIN: f32 = Self::IMAGE_SIZE.x * 2f32;
     const FULL_IMAGE_SIZE: Vec2 = Vec2::new(10000f32, 8000f32);
     const ZOOMS: [f32; 5] = [0.2, 0.4, 0.6, 0.8, 1f32];
+    const STARTING_ZOOM_INDEX: usize = 0;
 
     pub fn new(_: &eframe::CreationContext<'_>) -> Self {
         Default::default()
@@ -74,11 +74,6 @@ impl MainWindow {
             && (0..self.image_number.1 as i8).contains(&y_index)
         {
             let index = y_index as u16 * self.image_number.0 as u16 + x_index as u16;
-            // println!(
-            //     "{}, {} => {}, {} => {}, {} => {}",
-            //     x, y, new_x, new_y, x_index, y_index, index
-            // );
-
             if let Some(image_status) = self.images.get_mut(&(index, self.zoom_index)) {
                 if let ImageStatus::Ready(image) = image_status {
                     let pos = Pos2::new(x as f32, y as f32);
@@ -101,23 +96,19 @@ impl MainWindow {
         }
     }
 
-    fn load_image(&mut self, ctx: Context, index: u16) {
-        let tx = self.tx.clone();
-        let zoom_index = self.zoom_index;
-        let zoom = Self::ZOOMS[zoom_index];
-        tokio::spawn(async move {
-            let image = Image::from_ui_and_index(&ctx, index, zoom);
-            let _ = tx.send((image, index, zoom_index));
-            ctx.request_repaint();
-        });
-    }
-
     fn central_panel_ui(&mut self, ui: &Ui) {
         let ctx = ui.ctx();
         ui.input(|input_state| {
             if ui.ui_contains_pointer() {
                 if input_state.pointer.primary_pressed() {
                     self.clicked_position = input_state.pointer.interact_pos();
+                }
+
+                if input_state
+                    .pointer
+                    .button_clicked(egui::PointerButton::Middle)
+                {
+                    self.position = Pos2::ZERO;
                 }
 
                 let scroll_delta = input_state.scroll_delta.y;
@@ -153,11 +144,10 @@ impl MainWindow {
         let size = ui.available_size();
         let rect = Rect::from_two_pos(top_left, top_left + size);
 
-        let left = (pos.x % Self::IMAGE_SIZE.x) - Self::MARGIN;
-        let top = (pos.y % Self::IMAGE_SIZE.y) - Self::MARGIN;
-        let right = rect.right() + Self::MARGIN;
-        let bottom = rect.bottom() + Self::MARGIN;
-
+        let left = pos.x % Self::IMAGE_SIZE.x;
+        let top = pos.y % Self::IMAGE_SIZE.y;
+        let right = rect.right();
+        let bottom = rect.bottom();
         for x in (left as i32..=right as i32).step_by(Self::IMAGE_SIZE.x as usize) {
             for y in (top as i32..=bottom as i32).step_by(Self::IMAGE_SIZE.y as usize) {
                 self.body_loop(x, y, pos, ui);
@@ -169,6 +159,17 @@ impl MainWindow {
                 return image.used;
             }
             true
+        });
+    }
+
+    fn load_image(&mut self, ctx: Context, index: u16) {
+        let tx = self.tx.clone();
+        let zoom_index = self.zoom_index;
+        let zoom = Self::ZOOMS[zoom_index];
+        tokio::spawn(async move {
+            let image = Image::from_ui_and_index(&ctx, index, zoom);
+            let _ = tx.send((image, index, zoom_index));
+            ctx.request_repaint();
         });
     }
 
@@ -203,7 +204,7 @@ impl Default for MainWindow {
     fn default() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
 
-        let zoom_index = 4;
+        let zoom_index = Self::STARTING_ZOOM_INDEX;
         let image_number = Self::create_zoom(zoom_index);
 
         println!("{image_number:?}");
@@ -222,12 +223,37 @@ impl Default for MainWindow {
 
 impl eframe::App for MainWindow {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Ok((image, index, zoom_index)) = self.rx.try_recv() {
+        let images_loaded_length = self
+            .images
+            .iter()
+            .filter(|(_, image_status)| {
+                if let ImageStatus::Ready(_) = image_status {
+                    return true;
+                }
+
+                false
+            })
+            .count();
+
+        let images_loading_length = self
+            .images
+            .iter()
+            .filter(|(_, image_status)| {
+                if let ImageStatus::Ready(_) = image_status {
+                    return false;
+                }
+
+                true
+            })
+            .count();
+
+        // println!("{images_loaded_length} images loaded, {images_loading_length} images loading");
+        self.rx.try_iter().for_each(|(image, index, zoom_index)| {
             if zoom_index == self.zoom_index {
                 self.images
                     .insert((index, self.zoom_index), ImageStatus::Ready(image));
             }
-        }
+        });
 
         let frame = Frame::default().fill(Color32::from_rgb(30, 25, 25));
         CentralPanel::default()
