@@ -4,20 +4,20 @@ use std::{
 };
 
 use egui::{
-    CentralPanel, Color32, ColorImage, Context, Frame, Pos2, Rect, TextureHandle, Ui, Vec2,
+    CentralPanel, Color32, ColorImage, Context, Frame, Pos2, Rect, TextureHandle, Ui, Vec2, Window,
 };
 use image::io::Reader;
 use lombok::AllArgsConstructor;
+
+pub enum ImageStatus {
+    Loading,
+    Ready(Image),
+}
 
 #[derive(AllArgsConstructor)]
 pub struct Image {
     handle: TextureHandle,
     used: bool,
-}
-
-pub enum ImageStatus {
-    Loading,
-    Ready(Image),
 }
 
 impl Image {
@@ -41,7 +41,7 @@ impl Image {
 }
 
 pub struct MainWindow {
-    zoom: f32,
+    zoom_index: usize,
     position: Pos2,
     clicked_position: Option<Pos2>,
     images: HashMap<u16, ImageStatus>,
@@ -55,23 +55,20 @@ impl MainWindow {
     const NUMBER_IMAGE_WIDTH: u16 = 40;
     const MARGIN: f32 = Self::IMAGE_SIZE.x * 2f32;
     const FULL_IMAGE_SIZE: Vec2 = Vec2::new(10000f32, 8000f32);
-    // const IMAGE_NUMBER: u32 = (Self::FULL_IMAGE_SIZE.x / Self::IMAGE_SIZE.x).ceil() as u32
-    //     * (Self::FULL_IMAGE_SIZE.y / Self::IMAGE_SIZE.y).ceil() as u32;
+    const ZOOMS: [f32; 5] = [0.2, 0.4, 0.6, 0.8, 1f32];
 
     pub fn new(_: &eframe::CreationContext<'_>) -> Self {
         Default::default()
     }
 
     fn body_loop(&mut self, x: i32, y: i32, pos: Pos2, ui: &Ui) {
-        // println!("{x}, {y}");
-
         let new_x = x - pos.x as i32;
         let new_y = y - pos.y as i32;
 
         let x_index = (new_x as f32 / Self::IMAGE_SIZE.x).floor() as i8;
         let y_index = (new_y as f32 / Self::IMAGE_SIZE.y).floor() as i8;
 
-        if x_index >= 0 && y_index >= 0 {
+        if (0..40).contains(&x_index) && (0..32).contains(&y_index) {
             let index = y_index as u16 * Self::NUMBER_IMAGE_WIDTH + x_index as u16;
             if index <= self.image_number {
                 // println!(
@@ -102,14 +99,61 @@ impl MainWindow {
     }
 
     fn load_image(&mut self, ctx: Context, index: u16) {
-        {
-            let tx = self.tx.clone();
-            tokio::spawn(async move {
-                let image = Image::from_ui_and_index(&ctx, index);
-                let _ = tx.send((image, index));
-                ctx.request_repaint();
-            });
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let image = Image::from_ui_and_index(&ctx, index);
+            let _ = tx.send((image, index));
+            ctx.request_repaint();
+        });
+    }
+
+    fn central_panel_ui(&mut self, ui: &Ui) {
+        let ctx = ui.ctx();
+        ui.input(|input_state| {
+            if input_state.pointer.primary_pressed() && ui.ui_contains_pointer() {
+                self.clicked_position = input_state.pointer.interact_pos();
+            } else if input_state.pointer.primary_released() {
+                if let Some(clicked_position) = self.clicked_position {
+                    self.position += ctx.pointer_interact_pos().unwrap() - clicked_position;
+                    self.clicked_position = None;
+                }
+            }
+        });
+
+        let pos = self.position
+            + self
+                .clicked_position
+                .map(|pos| ctx.pointer_interact_pos().unwrap() - pos)
+                .unwrap_or(Vec2::ZERO);
+
+        self.images.iter_mut().for_each(|(_, image_status)| {
+            if let ImageStatus::Ready(ref mut image) = image_status {
+                image.used = false;
+            }
+        });
+
+        let top_left = Pos2::ZERO;
+
+        let size = ui.available_size();
+        let rect = Rect::from_two_pos(top_left, top_left + size);
+
+        let left = (pos.x % Self::IMAGE_SIZE.x) - Self::MARGIN;
+        let top = (pos.y % Self::IMAGE_SIZE.y) - Self::MARGIN;
+        let right = rect.right() + Self::MARGIN;
+        let bottom = rect.bottom() + Self::MARGIN;
+
+        for x in (left as i32..=right as i32).step_by(Self::IMAGE_SIZE.x as usize) {
+            for y in (top as i32..=bottom as i32).step_by(Self::IMAGE_SIZE.y as usize) {
+                self.body_loop(x, y, pos, ui);
+            }
         }
+
+        self.images.retain(|_, image_status| {
+            if let ImageStatus::Ready(ref image) = image_status {
+                return image.used;
+            }
+            true
+        });
     }
 }
 
@@ -117,7 +161,7 @@ impl Default for MainWindow {
     fn default() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         Self {
-            zoom: 1f32,
+            zoom_index: 4,
             position: Pos2::ZERO,
             clicked_position: None,
             images: HashMap::new(),
@@ -134,57 +178,13 @@ impl eframe::App for MainWindow {
             self.images.insert(index, ImageStatus::Ready(image));
         }
 
-        println!("{} images loaded", self.images.len());
-
-        ctx.input(|input_state| {
-            if input_state.pointer.primary_pressed() {
-                self.clicked_position = input_state.pointer.interact_pos();
-            } else if input_state.pointer.primary_released() {
-                self.position +=
-                    ctx.pointer_interact_pos().unwrap() - self.clicked_position.unwrap();
-                self.clicked_position = None;
-            }
-        });
-
         let frame = Frame::default().fill(Color32::from_rgb(30, 25, 25));
-        CentralPanel::default().frame(frame).show(ctx, |ui| {
-            // TODO debug
-            // self.position = Pos2::new(-1f32, -1f32);
+        CentralPanel::default()
+            .frame(frame)
+            .show(ctx, |ui| self.central_panel_ui(ui));
 
-            let pos = self.position
-                + self
-                    .clicked_position
-                    .map(|pos| ctx.pointer_interact_pos().unwrap() - pos)
-                    .unwrap_or(Vec2::ZERO);
-
-            self.images.iter_mut().for_each(|(_, image_status)| {
-                if let ImageStatus::Ready(ref mut image) = image_status {
-                    image.used = false;
-                }
-            });
-
-            let top_left = Pos2::ZERO;
-
-            let size = ui.available_size();
-            let rect = Rect::from_two_pos(top_left, top_left + size);
-
-            let left = (pos.x % Self::IMAGE_SIZE.x) - Self::MARGIN;
-            let top = (pos.y % Self::IMAGE_SIZE.y) - Self::MARGIN;
-            let right = rect.right() + Self::MARGIN;
-            let bottom = rect.bottom() + Self::MARGIN;
-
-            for x in (left as i32..=right as i32).step_by(Self::IMAGE_SIZE.x as usize) {
-                for y in (top as i32..=bottom as i32).step_by(Self::IMAGE_SIZE.y as usize) {
-                    self.body_loop(x, y, pos, &ui);
-                }
-            }
-
-            self.images.retain(|_, image_status| {
-                if let ImageStatus::Ready(ref image) = image_status {
-                    return image.used;
-                }
-                true
-            });
+        Window::new("hello window").show(ctx, |ui| {
+            //
         });
     }
 }
