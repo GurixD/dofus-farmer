@@ -21,10 +21,13 @@ pub struct Image {
 }
 
 impl Image {
-    pub fn from_ui_and_index(ctx: &Context, index: u16) -> Self {
+    pub fn from_ui_and_index(ctx: &Context, index: u16, zoom: f32) -> Self {
         // Images start at 1
-        let color_image =
-            Self::load_image_from_path(&format!("src/resources/worldmap/1/{}.jpg", index + 1));
+        let color_image = Self::load_image_from_path(&format!(
+            "src/resources/worldmap/{}/{}.jpg",
+            zoom,
+            index + 1
+        ));
         let handle = ctx.load_texture(&format!("map{index}"), color_image, Default::default());
 
         Image::new(handle, true)
@@ -44,15 +47,14 @@ pub struct MainWindow {
     zoom_index: usize,
     position: Pos2,
     clicked_position: Option<Pos2>,
-    images: HashMap<u16, ImageStatus>,
-    image_number: u16,
-    tx: Sender<(Image, u16)>,
-    rx: Receiver<(Image, u16)>,
+    images: HashMap<(u16, usize), ImageStatus>,
+    image_number: (u8, u8),
+    tx: Sender<(Image, u16, usize)>,
+    rx: Receiver<(Image, u16, usize)>,
 }
 
 impl MainWindow {
     const IMAGE_SIZE: Vec2 = Vec2::new(250f32, 250f32);
-    const NUMBER_IMAGE_WIDTH: u16 = 40;
     const MARGIN: f32 = Self::IMAGE_SIZE.x * 2f32;
     const FULL_IMAGE_SIZE: Vec2 = Vec2::new(10000f32, 8000f32);
     const ZOOMS: [f32; 5] = [0.2, 0.4, 0.6, 0.8, 1f32];
@@ -68,41 +70,44 @@ impl MainWindow {
         let x_index = (new_x as f32 / Self::IMAGE_SIZE.x).floor() as i8;
         let y_index = (new_y as f32 / Self::IMAGE_SIZE.y).floor() as i8;
 
-        if (0..40).contains(&x_index) && (0..32).contains(&y_index) {
-            let index = y_index as u16 * Self::NUMBER_IMAGE_WIDTH + x_index as u16;
-            if index <= self.image_number {
-                // println!(
-                //     "{}, {} => {}, {} => {}, {} => {} => {}",
-                //     x, y, new_x, new_y, x_index, y_index, index, new_index
-                // );
+        if (0..self.image_number.0 as i8).contains(&x_index)
+            && (0..self.image_number.1 as i8).contains(&y_index)
+        {
+            let index = y_index as u16 * self.image_number.0 as u16 + x_index as u16;
+            // println!(
+            //     "{}, {} => {}, {} => {}, {} => {}",
+            //     x, y, new_x, new_y, x_index, y_index, index
+            // );
 
-                if let Some(image_status) = self.images.get_mut(&index) {
-                    if let ImageStatus::Ready(image) = image_status {
-                        let pos = Pos2::new(x as f32, y as f32);
+            if let Some(image_status) = self.images.get_mut(&(index, self.zoom_index)) {
+                if let ImageStatus::Ready(image) = image_status {
+                    let pos = Pos2::new(x as f32, y as f32);
 
-                        // println!("drawing {} in {:?}", image.name(), pos);
-                        ui.painter().image(
-                            image.handle.id(),
-                            Rect::from_two_pos(pos, pos + Self::IMAGE_SIZE),
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1f32, 1f32)),
-                            Color32::WHITE,
-                        );
+                    // println!("drawing {} in {:?}", image.name(), pos);
+                    ui.painter().image(
+                        image.handle.id(),
+                        Rect::from_two_pos(pos, pos + Self::IMAGE_SIZE),
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1f32, 1f32)),
+                        Color32::WHITE,
+                    );
 
-                        image.used = true;
-                    }
-                } else {
-                    self.images.insert(index, ImageStatus::Loading);
-                    self.load_image(ui.ctx().clone(), index);
+                    image.used = true;
                 }
+            } else {
+                self.images
+                    .insert((index, self.zoom_index), ImageStatus::Loading);
+                self.load_image(ui.ctx().clone(), index);
             }
         }
     }
 
     fn load_image(&mut self, ctx: Context, index: u16) {
         let tx = self.tx.clone();
+        let zoom_index = self.zoom_index;
+        let zoom = Self::ZOOMS[zoom_index];
         tokio::spawn(async move {
-            let image = Image::from_ui_and_index(&ctx, index);
-            let _ = tx.send((image, index));
+            let image = Image::from_ui_and_index(&ctx, index, zoom);
+            let _ = tx.send((image, index, zoom_index));
             ctx.request_repaint();
         });
     }
@@ -110,9 +115,20 @@ impl MainWindow {
     fn central_panel_ui(&mut self, ui: &Ui) {
         let ctx = ui.ctx();
         ui.input(|input_state| {
-            if input_state.pointer.primary_pressed() && ui.ui_contains_pointer() {
-                self.clicked_position = input_state.pointer.interact_pos();
-            } else if input_state.pointer.primary_released() {
+            if ui.ui_contains_pointer() {
+                if input_state.pointer.primary_pressed() {
+                    self.clicked_position = input_state.pointer.interact_pos();
+                }
+
+                let scroll_delta = input_state.scroll_delta.y;
+                if scroll_delta > 0f32 {
+                    self.zoom_out();
+                } else if scroll_delta < 0f32 {
+                    self.zoom_in();
+                }
+            }
+
+            if input_state.pointer.primary_released() {
                 if let Some(clicked_position) = self.clicked_position {
                     self.position += ctx.pointer_interact_pos().unwrap() - clicked_position;
                     self.clicked_position = None;
@@ -155,17 +171,49 @@ impl MainWindow {
             true
         });
     }
+
+    fn zoom_in(&mut self) {
+        if self.zoom_index > 0 {
+            self.update_zoom(self.zoom_index - 1);
+        }
+    }
+
+    fn zoom_out(&mut self) {
+        if self.zoom_index < Self::ZOOMS.len() - 1 {
+            self.update_zoom(self.zoom_index + 1);
+        }
+    }
+
+    fn update_zoom(&mut self, zoom_index: usize) {
+        self.images.clear();
+        self.zoom_index = zoom_index;
+        self.image_number = Self::create_zoom(zoom_index);
+    }
+
+    fn create_zoom(zoom_index: usize) -> (u8, u8) {
+        let zoom = Self::ZOOMS[zoom_index];
+        (
+            ((Self::FULL_IMAGE_SIZE.x * zoom) / Self::IMAGE_SIZE.x).ceil() as u8,
+            ((Self::FULL_IMAGE_SIZE.y * zoom) / Self::IMAGE_SIZE.y).ceil() as u8,
+        )
+    }
 }
 
 impl Default for MainWindow {
     fn default() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+
+        let zoom_index = 4;
+        let image_number = Self::create_zoom(zoom_index);
+
+        println!("{image_number:?}");
+
         Self {
-            zoom_index: 4,
+            zoom_index,
             position: Pos2::ZERO,
             clicked_position: None,
             images: HashMap::new(),
-            image_number: 40 * 32,
+            image_number,
             tx,
             rx,
         }
@@ -174,8 +222,11 @@ impl Default for MainWindow {
 
 impl eframe::App for MainWindow {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Ok((image, index)) = self.rx.try_recv() {
-            self.images.insert(index, ImageStatus::Ready(image));
+        if let Ok((image, index, zoom_index)) = self.rx.try_recv() {
+            if zoom_index == self.zoom_index {
+                self.images
+                    .insert((index, self.zoom_index), ImageStatus::Ready(image));
+            }
         }
 
         let frame = Frame::default().fill(Color32::from_rgb(30, 25, 25));
@@ -183,7 +234,7 @@ impl eframe::App for MainWindow {
             .frame(frame)
             .show(ctx, |ui| self.central_panel_ui(ui));
 
-        Window::new("hello window").show(ctx, |ui| {
+        Window::new("hello window").show(ctx, |_ui| {
             //
         });
     }
