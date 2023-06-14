@@ -84,7 +84,7 @@ impl MainWindow {
         let (tx, rx) = std::sync::mpsc::channel();
 
         let zoom_index = Self::STARTING_ZOOM_INDEX;
-        let images_number = Self::create_zoom(zoom_index);
+        let images_number = Self::image_number_from_zoom(zoom_index);
         let map_min_max = {
             use crate::database::schema::maps;
             use diesel::dsl::{max, min};
@@ -250,9 +250,9 @@ impl MainWindow {
 
             let scroll_delta = input_state.scroll_delta.y;
             if scroll_delta > 0f32 {
-                self.zoom_out();
+                self.zoom_out(input_state.pointer.interact_pos().unwrap());
             } else if scroll_delta < 0f32 {
-                self.zoom_in();
+                self.zoom_in(input_state.pointer.interact_pos().unwrap());
             }
         }
 
@@ -321,25 +321,37 @@ impl MainWindow {
         });
     }
 
-    fn zoom_in(&mut self) {
+    fn zoom_in(&mut self, pointer_pos: Pos2) {
         if self.zoom_index > 0 {
-            self.update_zoom(self.zoom_index - 1);
+            self.update_zoom(self.zoom_index - 1, pointer_pos);
         }
     }
 
-    fn zoom_out(&mut self) {
+    fn zoom_out(&mut self, pointer_pos: Pos2) {
         if self.zoom_index < Self::ZOOMS.len() - 1 {
-            self.update_zoom(self.zoom_index + 1);
+            self.update_zoom(self.zoom_index + 1, pointer_pos);
         }
     }
 
-    fn update_zoom(&mut self, zoom_index: usize) {
+    fn update_zoom(&mut self, zoom_index: usize, _pointer_pos: Pos2) {
+        let old_zoom_index = self.zoom_index;
+
         self.images.clear();
         self.zoom_index = zoom_index;
-        self.images_number = Self::create_zoom(zoom_index);
+        self.images_number = Self::image_number_from_zoom(zoom_index);
+
+        // let fullmap_position = self.map_position
+        //     + self
+        //         .clicked_position
+        //         .map(|pos| pointer_pos - pos)
+        //         .unwrap_or(Vec2::ZERO);
+
+        self.map_position = (self.map_position.to_vec2() / Self::ZOOMS[old_zoom_index]
+            * Self::ZOOMS[zoom_index])
+            .to_pos2();
     }
 
-    fn create_zoom(zoom_index: usize) -> (u8, u8) {
+    fn image_number_from_zoom(zoom_index: usize) -> (u8, u8) {
         let zoom = Self::ZOOMS[zoom_index];
         (
             ((Self::FULL_IMAGE_SIZE.x * zoom) / Self::IMAGE_SIZE.x).ceil() as u8,
