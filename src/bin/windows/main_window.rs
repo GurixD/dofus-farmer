@@ -203,19 +203,19 @@ impl MainWindow {
                 );
 
                 let offset = (
-                    Self::MAPS_RECT.left() % rect_size.x,
-                    Self::MAPS_RECT.top() % rect_size.y,
+                    (Self::MAPS_RECT.left() * zoom) % rect_size.x,
+                    (Self::MAPS_RECT.top() * zoom) % rect_size.y,
                 );
 
-                let x_index = ((pointer_pos_on_map_zoomed.x - offset.0) / rect_size.x).floor();
+                let x_index =
+                    ((pointer_pos_on_map_zoomed.x * zoom - offset.0) / rect_size.x).floor();
+                let y_index =
+                    ((pointer_pos_on_map_zoomed.y * zoom - offset.1) / rect_size.y).floor();
 
                 println!("{}", x_index as i32 - 5 + self.map_min_max.x_min as i32);
 
                 let x = x_index * rect_size.x + fullmap_position.x + offset.0;
-                let y = ((pointer_pos_on_map_zoomed.y - offset.1) / rect_size.y).floor()
-                    * rect_size.y
-                    + fullmap_position.y
-                    + offset.1;
+                let y = y_index * rect_size.y + fullmap_position.y + offset.1;
 
                 let map_pos = Pos2::new(x, y);
 
