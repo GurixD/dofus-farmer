@@ -12,6 +12,7 @@ use windows::main_window::MainWindow;
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
+    use eframe::NativeOptions;
     use tracing_subscriber::fmt::format::FmtSpan;
 
     let rt = Runtime::new().expect("Unable to create Runtime");
@@ -24,9 +25,12 @@ fn main() -> eframe::Result<()> {
 
     // tracing::subscriber::set_global_default(subscriber).expect("Unable to set global subscriber");
 
+    let mut options = NativeOptions::default();
+    options.maximized = true;
+
     eframe::run_native(
         "Dofus farmer",
-        Default::default(),
+        options,
         Box::new(|cc| Box::new(MainWindow::new(cc, establish_connection()))),
     )
 }

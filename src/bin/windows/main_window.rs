@@ -70,11 +70,11 @@ impl MainWindow {
     const IMAGE_SIZE: Vec2 = Vec2::new(250f32, 250f32);
     const FULL_IMAGE_SIZE: Vec2 = Vec2::new(10000f32, 8000f32);
     const ZOOMS: [f32; 5] = [0.2, 0.4, 0.6, 0.8, 1f32];
-    const STARTING_ZOOM_INDEX: usize = 0;
+    const STARTING_ZOOM_INDEX: usize = 4;
     const MAPS_RECT: Rect = Self::init_map_rect();
 
     const fn init_map_rect() -> Rect {
-        let min = Pos2::new(0f32, 0f32);
+        let min = Pos2::new(360f32, 0f32);
         let max = Pos2::new(
             (min.x as i32 + Self::FULL_IMAGE_SIZE.x as i32) as f32,
             (min.y as i32 + Self::FULL_IMAGE_SIZE.y as i32) as f32,
@@ -144,7 +144,7 @@ impl MainWindow {
 
                     ui.painter().image(
                         image.handle.id(),
-                        Rect::from_two_pos(pos, pos + Self::IMAGE_SIZE),
+                        Rect::from_two_pos(pos, pos + image.handle.size_vec2()),
                         Rect::from_min_max(Pos2::ZERO, Pos2::new(1f32, 1f32)),
                         Color32::WHITE,
                     );
@@ -173,16 +173,24 @@ impl MainWindow {
                 .map(|pos| ctx.pointer_latest_pos().unwrap() - pos)
                 .unwrap_or(Vec2::ZERO);
 
+        let pointer_pos_on_map = ctx
+            .pointer_latest_pos()
+            .map(|pos| (pos - fullmap_position).to_pos2());
+        let pointer_pos_on_map_zoomed =
+            pointer_pos_on_map.map(|pos| (pos.to_vec2() / Self::ZOOMS[self.zoom_index]).to_pos2());
+
+        // println!("{:?}", cursor_pos_on_map);
+
         // Draw full map images
         self.reset_images_flags();
 
         let size = ui.available_size();
-        let rect = Rect::from_two_pos(Pos2::ZERO, Pos2::ZERO + size);
+        println!("{size:?}");
 
         let left = fullmap_position.x % Self::IMAGE_SIZE.x;
         let top = fullmap_position.y % Self::IMAGE_SIZE.y;
-        let right = rect.right();
-        let bottom = rect.bottom();
+        let right = size.x;
+        let bottom = size.y;
         for x in (left as i32..=right as i32).step_by(Self::IMAGE_SIZE.x as usize) {
             for y in (top as i32..=bottom as i32).step_by(Self::IMAGE_SIZE.y as usize) {
                 self.draw_map_body_loop(x, y, fullmap_position, ui);
@@ -193,25 +201,41 @@ impl MainWindow {
 
         // Draw map rect on pointer
         if let Some(pointer_pos) = pointer_pos {
-            let zoom = Self::ZOOMS[self.zoom_index];
-            let rect_size = Vec2::new(
-                (Self::MAPS_RECT.width() * zoom)
-                    / (self.map_min_max.x_max - self.map_min_max.x_min) as f32,
-                (Self::MAPS_RECT.height() * zoom)
-                    / (self.map_min_max.y_max - self.map_min_max.y_min) as f32,
-            );
+            if let Some(pointer_pos_on_map_zoomed) = pointer_pos_on_map_zoomed {
+                // if Self::MAPS_RECT.contains(pointer_pos_on_map)
+                {
+                    let zoom = Self::ZOOMS[self.zoom_index];
+                    let rect_size = Vec2::new(
+                        (Self::MAPS_RECT.width() * zoom)
+                            / (self.map_min_max.x_max - self.map_min_max.x_min) as f32,
+                        (Self::MAPS_RECT.height() * zoom)
+                            / (self.map_min_max.y_max - self.map_min_max.y_min) as f32,
+                    );
 
-            let map_pos = Pos2::new(
-                (pointer_pos.x / rect_size.x).floor() * rect_size.x,
-                (pointer_pos.y / rect_size.y).floor() * rect_size.y,
-            );
+                    let offset = (
+                        Self::MAPS_RECT.left() % rect_size.x,
+                        Self::MAPS_RECT.top() % rect_size.y,
+                    );
 
-            let rect = Rect::from_two_pos(map_pos, map_pos + rect_size);
-            ui.painter().rect_filled(
-                rect,
-                Rounding::none(),
-                Color32::from_rgba_unmultiplied(61, 183, 255, 100),
-            );
+                    let x = ((pointer_pos_on_map_zoomed.x - offset.0) / rect_size.x).floor()
+                        * rect_size.x
+                        + fullmap_position.x
+                        + offset.0;
+                    let y = ((pointer_pos_on_map_zoomed.y - offset.1) / rect_size.y).floor()
+                        * rect_size.y
+                        + fullmap_position.y
+                        + offset.1;
+
+                    let map_pos = Pos2::new(x, y);
+
+                    let rect = Rect::from_two_pos(map_pos, map_pos + rect_size);
+                    ui.painter().rect_filled(
+                        rect,
+                        Rounding::none(),
+                        Color32::from_rgba_unmultiplied(60, 180, 255, 100),
+                    );
+                }
+            }
         }
     }
 
