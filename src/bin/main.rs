@@ -22,7 +22,7 @@ fn main() -> eframe::Result<()> {
         .pretty();
     let subscriber = Registry::default().with(stdout_log);
 
-    tracing::subscriber::set_global_default(subscriber).expect("Unable to set global subscriber");
+    // tracing::subscriber::set_global_default(subscriber).expect("Unable to set global subscriber");
 
     eframe::run_native(
         "Dofus farmer",

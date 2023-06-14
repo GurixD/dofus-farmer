@@ -5,12 +5,12 @@ use std::{
 
 use diesel::PgConnection;
 use egui::{
-    CentralPanel, Color32, ColorImage, Context, Frame, Pos2, Rect, Rounding, TextureHandle, Ui,
-    Vec2, Window,
+    CentralPanel, Color32, ColorImage, Context, Frame, InputState, Pos2, Rect, Rounding,
+    TextureHandle, Ui, Vec2, Window,
 };
 use image::io::Reader;
 use lombok::AllArgsConstructor;
-use tracing::{span, trace_span, Level};
+use tracing::trace_span;
 
 enum ImageStatus {
     Loading,
@@ -56,7 +56,7 @@ impl Image {
 
 pub struct MainWindow {
     zoom_index: usize,
-    position: Pos2,
+    map_position: Pos2,
     clicked_position: Option<Pos2>,
     images: HashMap<(u16, usize), ImageStatus>,
     images_number: (u8, u8),
@@ -113,7 +113,7 @@ impl MainWindow {
 
         Self {
             zoom_index,
-            position: Pos2::ZERO,
+            map_position: Pos2::ZERO,
             clicked_position: None,
             images: HashMap::new(),
             images_number,
@@ -165,77 +165,110 @@ impl MainWindow {
 
         let ctx = ui.ctx();
         let ui_contains_pointer = ui.ui_contains_pointer();
-        let pointer_pos = ui.input(|input_state| {
-            let span = trace_span!("read inputs");
-            let _guard = span.enter();
+        let pointer_pos = ui.input(|input_state| self.on_input(input_state, ui_contains_pointer));
 
-            if ui_contains_pointer {
-                let span = trace_span!("ui_contains_pointer");
-                let _guard = span.enter();
-
-                if input_state.pointer.primary_pressed() {
-                    let span = trace_span!("primary_pressed");
-                    let _guard = span.enter();
-                    self.clicked_position = input_state.pointer.interact_pos();
-                }
-
-                if input_state
-                    .pointer
-                    .button_clicked(egui::PointerButton::Middle)
-                {
-                    self.position = Pos2::ZERO;
-                }
-
-                let scroll_delta = input_state.scroll_delta.y;
-                if scroll_delta > 0f32 {
-                    self.zoom_out();
-                } else if scroll_delta < 0f32 {
-                    self.zoom_in();
-                }
-            }
-
-            if input_state.pointer.primary_released() {
-                let span = trace_span!("primary_released");
-                let _guard = span.enter();
-                if let Some(clicked_position) = self.clicked_position {
-                    let span = trace_span!("if");
-                    let _guard = span.enter();
-                    self.position += input_state.pointer.interact_pos().unwrap() - clicked_position;
-                    self.clicked_position = None;
-                }
-            }
-
-            input_state
-                .pointer
-                .interact_pos()
-                .filter(|_| ui_contains_pointer)
-        });
-
-        // Draw full map images
-        let pos = self.position
+        let fullmap_position = self.map_position
             + self
                 .clicked_position
                 .map(|pos| ctx.pointer_latest_pos().unwrap() - pos)
                 .unwrap_or(Vec2::ZERO);
+
+        // Draw full map images
+        self.reset_images_flags();
+
+        let size = ui.available_size();
+        let rect = Rect::from_two_pos(Pos2::ZERO, Pos2::ZERO + size);
+
+        let left = fullmap_position.x % Self::IMAGE_SIZE.x;
+        let top = fullmap_position.y % Self::IMAGE_SIZE.y;
+        let right = rect.right();
+        let bottom = rect.bottom();
+        for x in (left as i32..=right as i32).step_by(Self::IMAGE_SIZE.x as usize) {
+            for y in (top as i32..=bottom as i32).step_by(Self::IMAGE_SIZE.y as usize) {
+                self.draw_map_body_loop(x, y, fullmap_position, ui);
+            }
+        }
+
+        self.check_images_flags();
+
+        // Draw map rect on pointer
+        if let Some(pointer_pos) = pointer_pos {
+            let zoom = Self::ZOOMS[self.zoom_index];
+            let rect_size = Vec2::new(
+                (Self::MAPS_RECT.width() * zoom)
+                    / (self.map_min_max.x_max - self.map_min_max.x_min) as f32,
+                (Self::MAPS_RECT.height() * zoom)
+                    / (self.map_min_max.y_max - self.map_min_max.y_min) as f32,
+            );
+
+            let map_pos = Pos2::new(
+                (pointer_pos.x / rect_size.x).floor() * rect_size.x,
+                (pointer_pos.y / rect_size.y).floor() * rect_size.y,
+            );
+
+            let rect = Rect::from_two_pos(map_pos, map_pos + rect_size);
+            ui.painter().rect_filled(
+                rect,
+                Rounding::none(),
+                Color32::from_rgba_unmultiplied(61, 183, 255, 100),
+            );
+        }
+    }
+
+    fn on_input(&mut self, input_state: &InputState, ui_contains_pointer: bool) -> Option<Pos2> {
+        let span = trace_span!("read inputs");
+        let _guard = span.enter();
+
+        if ui_contains_pointer {
+            let span = trace_span!("ui_contains_pointer");
+            let _guard = span.enter();
+
+            if input_state.pointer.primary_pressed() {
+                self.clicked_position = input_state.pointer.interact_pos();
+            }
+
+            if input_state
+                .pointer
+                .button_clicked(egui::PointerButton::Middle)
+            {
+                self.map_position = Pos2::ZERO;
+            }
+
+            let scroll_delta = input_state.scroll_delta.y;
+            if scroll_delta > 0f32 {
+                self.zoom_out();
+            } else if scroll_delta < 0f32 {
+                self.zoom_in();
+            }
+        }
+
+        if input_state.pointer.primary_released() {
+            if let Some(clicked_position) = self.clicked_position {
+                self.map_position += input_state.pointer.interact_pos().unwrap() - clicked_position;
+                self.clicked_position = None;
+            }
+        }
+
+        input_state
+            .pointer
+            .interact_pos()
+            .filter(|_| ui_contains_pointer)
+    }
+
+    fn reset_images_flags(&mut self) {
+        let span = trace_span!("reset_images_flags");
+        let _guard = span.enter();
 
         self.images.iter_mut().for_each(|(_, image_status)| {
             if let ImageStatus::Ready(ref mut image) = image_status {
                 image.used = false;
             }
         });
+    }
 
-        let size = ui.available_size();
-        let rect = Rect::from_two_pos(Pos2::ZERO, Pos2::ZERO + size);
-
-        let left = pos.x % Self::IMAGE_SIZE.x;
-        let top = pos.y % Self::IMAGE_SIZE.y;
-        let right = rect.right();
-        let bottom = rect.bottom();
-        for x in (left as i32..=right as i32).step_by(Self::IMAGE_SIZE.x as usize) {
-            for y in (top as i32..=bottom as i32).step_by(Self::IMAGE_SIZE.y as usize) {
-                self.draw_map_body_loop(x, y, pos, ui);
-            }
-        }
+    fn check_images_flags(&mut self) {
+        let span = trace_span!("check_images_flags");
+        let _guard = span.enter();
 
         self.images.retain(|_, image_status| {
             if let ImageStatus::Ready(ref image) = image_status {
@@ -243,20 +276,6 @@ impl MainWindow {
             }
             true
         });
-
-        // Draw map rect on pointer
-        if let Some(pointer_pos) = pointer_pos {
-            let rect_size = Vec2::new(
-                Self::MAPS_RECT.width() / (self.map_min_max.x_max - self.map_min_max.x_min) as f32,
-                Self::MAPS_RECT.height() / (self.map_min_max.y_max - self.map_min_max.y_min) as f32,
-            );
-            let rect = Rect::from_center_size(pointer_pos, rect_size);
-            ui.painter().rect_filled(
-                rect,
-                Rounding::none(),
-                Color32::from_rgba_unmultiplied(61, 183, 255, 100),
-            )
-        }
     }
 
     fn load_image(&mut self, ctx: Context, index: u16) {
@@ -273,6 +292,18 @@ impl MainWindow {
             let image = Image::from_ui_and_index(&ctx, index, zoom);
             let _ = tx.send((image, index, zoom_index));
             ctx.request_repaint();
+        });
+    }
+
+    fn check_for_new_images(&mut self) {
+        let span = trace_span!("check_for_new_images");
+        let _guard = span.enter();
+
+        self.rx.try_iter().for_each(|(image, index, zoom_index)| {
+            if zoom_index == self.zoom_index {
+                self.images
+                    .insert((index, self.zoom_index), ImageStatus::Ready(image));
+            }
         });
     }
 
@@ -333,16 +364,7 @@ impl eframe::App for MainWindow {
             .count();
 
         // println!("{_images_loaded_length} images loaded, {_images_loading_length} images loading");
-        {
-            let span = trace_span!("iterate new images with status Ready");
-            let _guard = span.enter();
-            self.rx.try_iter().for_each(|(image, index, zoom_index)| {
-                if zoom_index == self.zoom_index {
-                    self.images
-                        .insert((index, self.zoom_index), ImageStatus::Ready(image));
-                }
-            });
-        }
+        self.check_for_new_images();
 
         let frame = Frame::default().fill(Color32::from_rgb(30, 25, 25));
         CentralPanel::default()
