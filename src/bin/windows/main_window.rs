@@ -333,22 +333,16 @@ impl MainWindow {
         }
     }
 
-    fn update_zoom(&mut self, zoom_index: usize, _pointer_pos: Pos2) {
+    fn update_zoom(&mut self, zoom_index: usize, pointer_pos: Pos2) {
         let old_zoom_index = self.zoom_index;
 
         self.images.clear();
         self.zoom_index = zoom_index;
         self.images_number = Self::image_number_from_zoom(zoom_index);
 
-        // let fullmap_position = self.map_position
-        //     + self
-        //         .clicked_position
-        //         .map(|pos| pointer_pos - pos)
-        //         .unwrap_or(Vec2::ZERO);
-
-        self.map_position = (self.map_position.to_vec2() / Self::ZOOMS[old_zoom_index]
-            * Self::ZOOMS[zoom_index])
-            .to_pos2();
+        self.map_position = pointer_pos
+            + ((self.map_position - pointer_pos) / Self::ZOOMS[old_zoom_index]
+                * Self::ZOOMS[zoom_index]);
     }
 
     fn image_number_from_zoom(zoom_index: usize) -> (u8, u8) {
