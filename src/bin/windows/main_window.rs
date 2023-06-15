@@ -174,7 +174,7 @@ impl MainWindow {
         let pointer_pos_on_map_zoomed =
             pointer_pos_on_map.map(|pos| (pos.to_vec2() / Self::ZOOMS[self.zoom_index]).to_pos2());
 
-        println!("{:?}", pointer_pos_on_map_zoomed);
+        // println!("{:?}", pointer_pos_on_map_zoomed);
 
         // Draw full map images
         self.reset_images_flags();
@@ -208,25 +208,54 @@ impl MainWindow {
                 );
 
                 let x_index =
-                    ((pointer_pos_on_map_zoomed.x * zoom - offset.0) / rect_size.x).floor();
+                    ((pointer_pos_on_map_zoomed.x * zoom - offset.0) / rect_size.x).floor() - 5f32;
                 let y_index =
-                    ((pointer_pos_on_map_zoomed.y * zoom - offset.1) / rect_size.y).floor();
+                    ((pointer_pos_on_map_zoomed.y * zoom - offset.1) / rect_size.y).floor() - 6f32;
 
-                println!("{}", x_index as i32 - 5 + self.map_min_max.x_min as i32);
-
-                let x = x_index * rect_size.x + fullmap_position.x + offset.0;
-                let y = y_index * rect_size.y + fullmap_position.y + offset.1;
-
-                let map_pos = Pos2::new(x, y);
-
-                let rect = Rect::from_two_pos(map_pos, map_pos + rect_size);
-                ui.painter().rect_filled(
-                    rect,
-                    Rounding::none(),
-                    Color32::from_rgba_unmultiplied(60, 180, 255, 100),
-                );
+                self.map_rect_on_index(ui, x_index, y_index, fullmap_position);
+                self.map_rect_on_pos(ui, 0f32, 0f32, fullmap_position);
             }
         }
+    }
+
+    fn map_rect_on_index(&self, ui: &Ui, x_index: f32, y_index: f32, fullmap_position: Pos2) {
+        // println!("{x_index}{y_index}");
+        let x_index = x_index + 5f32;
+        let y_index = y_index + 6f32;
+
+        let zoom = Self::ZOOMS[self.zoom_index];
+        let rect_size = Vec2::new(
+            (Self::MAPS_RECT.width() * zoom)
+                / (self.map_min_max.x_max - self.map_min_max.x_min + 1) as f32,
+            (Self::MAPS_RECT.height() * zoom)
+                / (self.map_min_max.y_max - self.map_min_max.y_min + 1) as f32,
+        );
+
+        let offset = (
+            (Self::MAPS_RECT.left() * zoom) % rect_size.x,
+            (Self::MAPS_RECT.top() * zoom) % rect_size.y,
+        );
+
+        let x = x_index * rect_size.x + fullmap_position.x + offset.0;
+        let y = y_index * rect_size.y + fullmap_position.y + offset.1;
+
+        let map_pos = Pos2::new(x, y);
+
+        let rect = Rect::from_two_pos(map_pos, map_pos + rect_size);
+        ui.painter().rect_filled(
+            rect,
+            Rounding::none(),
+            Color32::from_rgba_unmultiplied(60, 180, 255, 100),
+        );
+    }
+
+    fn map_rect_on_pos(&self, ui: &Ui, x_index: f32, y_index: f32, fullmap_position: Pos2) {
+        self.map_rect_on_index(
+            ui,
+            x_index - self.map_min_max.x_min as f32,
+            y_index - self.map_min_max.y_min as f32,
+            fullmap_position,
+        )
     }
 
     fn on_input(&mut self, input_state: &InputState, ui_contains_pointer: bool) -> Option<Pos2> {
