@@ -12,9 +12,14 @@ use image::io::Reader;
 use lombok::AllArgsConstructor;
 use tracing::trace_span;
 
-enum ImageStatus {
+use crate::database::{
+    models::{map::Map, sub_area::SubArea},
+    schema::maps,
+};
+
+enum AsyncStatus<T> {
     Loading,
-    Ready(Image),
+    Ready(T),
 }
 
 #[derive(AllArgsConstructor)]
@@ -58,9 +63,10 @@ pub struct MainWindow {
     zoom_index: usize,
     map_position: Pos2,
     clicked_position: Option<Pos2>,
-    images: HashMap<(u16, usize), ImageStatus>,
+    images: HashMap<(u16, usize), AsyncStatus<Image>>,
     images_number: (u8, u8),
     map_min_max: MapMinMax,
+    sub_areas: HashMap<SubArea, Vec<Map>>,
     tx: Sender<(Image, u16, usize)>,
     rx: Receiver<(Image, u16, usize)>,
     connection: PgConnection,
@@ -86,7 +92,6 @@ impl MainWindow {
         let zoom_index = Self::STARTING_ZOOM_INDEX;
         let images_number = Self::image_number_from_zoom(zoom_index);
         let map_min_max = {
-            use crate::database::schema::maps;
             use diesel::dsl::{max, min};
             use diesel::prelude::*;
 
@@ -107,6 +112,32 @@ impl MainWindow {
                 min_max.3 as _,
             )
         };
+        let sub_areas = {
+            use crate::database::schema::sub_areas;
+            use diesel::prelude::*;
+
+            // TODO ignore sub areas without maps
+            let sub_areas = sub_areas::table
+                .select(SubArea::as_select())
+                .load(&mut connection)
+                .unwrap();
+
+            let maps = Map::belonging_to(&sub_areas)
+                .select(Map::as_select())
+                .load(&mut connection)
+                .unwrap();
+
+            let mut maps_per_sub_area: HashMap<SubArea, Vec<Map>> = maps
+                .grouped_by(&sub_areas)
+                .into_iter()
+                .zip(sub_areas)
+                .map(|(maps, sub_area)| (sub_area, maps))
+                .collect();
+
+            maps_per_sub_area.retain(|_, vec| !vec.is_empty());
+
+            maps_per_sub_area
+        };
 
         Self {
             zoom_index,
@@ -115,6 +146,7 @@ impl MainWindow {
             images: HashMap::new(),
             images_number,
             map_min_max,
+            sub_areas: sub_areas,
             tx,
             rx,
             connection,
@@ -136,7 +168,7 @@ impl MainWindow {
         {
             let index = y_index as u16 * self.images_number.0 as u16 + x_index as u16;
             if let Some(image_status) = self.images.get_mut(&(index, self.zoom_index)) {
-                if let ImageStatus::Ready(image) = image_status {
+                if let AsyncStatus::Ready(image) = image_status {
                     let pos = Pos2::new(x as f32, y as f32);
 
                     ui.painter().image(
@@ -150,7 +182,7 @@ impl MainWindow {
                 }
             } else {
                 self.images
-                    .insert((index, self.zoom_index), ImageStatus::Loading);
+                    .insert((index, self.zoom_index), AsyncStatus::Loading);
                 self.load_image(ui.ctx().clone(), index);
             }
         }
@@ -212,14 +244,44 @@ impl MainWindow {
                 let y_index =
                     ((pointer_pos_on_map_zoomed.y * zoom - offset.1) / rect_size.y).floor() - 6f32;
 
-                self.map_rect_on_index(ui, x_index, y_index, fullmap_position);
-                self.map_rect_on_pos(ui, 0f32, 0f32, fullmap_position);
+                self.map_rect_on_index(
+                    ui,
+                    x_index,
+                    y_index,
+                    fullmap_position,
+                    Some(Color32::from_rgba_unmultiplied(0, 0, 139, 100)),
+                );
+
+                let sub_area = self.sub_areas.iter().find(|(_, maps)| {
+                    maps.iter().any(|map| {
+                        map.x == x_index as i16 + self.map_min_max.x_min
+                            && map.y == y_index as i16 + self.map_min_max.y_min
+                    })
+                });
+
+                if let Some(sub_area) = sub_area {
+                    sub_area.1.iter().for_each(|map| {
+                        self.map_rect_on_pos(
+                            ui,
+                            map.x as f32,
+                            map.y as f32,
+                            fullmap_position,
+                            None,
+                        );
+                    });
+                }
             }
         }
     }
 
-    fn map_rect_on_index(&self, ui: &Ui, x_index: f32, y_index: f32, fullmap_position: Pos2) {
-        // println!("{x_index}{y_index}");
+    fn map_rect_on_index(
+        &self,
+        ui: &Ui,
+        x_index: f32,
+        y_index: f32,
+        fullmap_position: Pos2,
+        color: Option<Color32>,
+    ) {
         let x_index = x_index + 5f32;
         let y_index = y_index + 6f32;
 
@@ -245,16 +307,24 @@ impl MainWindow {
         ui.painter().rect_filled(
             rect,
             Rounding::none(),
-            Color32::from_rgba_unmultiplied(60, 180, 255, 100),
+            color.unwrap_or(Color32::from_rgba_unmultiplied(60, 180, 255, 50)),
         );
     }
 
-    fn map_rect_on_pos(&self, ui: &Ui, x_index: f32, y_index: f32, fullmap_position: Pos2) {
+    fn map_rect_on_pos(
+        &self,
+        ui: &Ui,
+        x_index: f32,
+        y_index: f32,
+        fullmap_position: Pos2,
+        color: Option<Color32>,
+    ) {
         self.map_rect_on_index(
             ui,
             x_index - self.map_min_max.x_min as f32,
             y_index - self.map_min_max.y_min as f32,
             fullmap_position,
+            color,
         )
     }
 
@@ -303,7 +373,7 @@ impl MainWindow {
         let _guard = span.enter();
 
         self.images.iter_mut().for_each(|(_, image_status)| {
-            if let ImageStatus::Ready(ref mut image) = image_status {
+            if let AsyncStatus::Ready(ref mut image) = image_status {
                 image.used = false;
             }
         });
@@ -314,7 +384,7 @@ impl MainWindow {
         let _guard = span.enter();
 
         self.images.retain(|_, image_status| {
-            if let ImageStatus::Ready(ref image) = image_status {
+            if let AsyncStatus::Ready(ref image) = image_status {
                 return image.used;
             }
             true
@@ -345,7 +415,7 @@ impl MainWindow {
         self.rx.try_iter().for_each(|(image, index, zoom_index)| {
             if zoom_index == self.zoom_index {
                 self.images
-                    .insert((index, self.zoom_index), ImageStatus::Ready(image));
+                    .insert((index, self.zoom_index), AsyncStatus::Ready(image));
             }
         });
     }
@@ -392,7 +462,7 @@ impl eframe::App for MainWindow {
             .images
             .iter()
             .filter(|(_, image_status)| {
-                if let ImageStatus::Ready(_) = image_status {
+                if let AsyncStatus::Ready(_) = image_status {
                     return true;
                 }
 
@@ -404,7 +474,7 @@ impl eframe::App for MainWindow {
             .images
             .iter()
             .filter(|(_, image_status)| {
-                if let ImageStatus::Ready(_) = image_status {
+                if let AsyncStatus::Ready(_) = image_status {
                     return false;
                 }
 
@@ -420,7 +490,7 @@ impl eframe::App for MainWindow {
             .frame(frame)
             .show(ctx, |ui| self.central_panel_ui(ui));
 
-        Window::new("hello window").show(ctx, |_ui| {
+        Window::new("Resources").show(ctx, |_ui| {
             //
         });
     }
