@@ -4,34 +4,55 @@
 mod database;
 mod windows;
 
-use crate::database::connection::establish_connection;
+use crate::database::connection::establish_pooled_connection;
+use eframe::NativeOptions;
 use tokio::runtime::Runtime;
-use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, Registry};
+use tracing::trace_span;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::Registry;
 use windows::main_window::MainWindow;
+
+fn main() {
+    let stdout_log = tracing_subscriber::fmt::layer()
+        .with_span_events(FmtSpan::ACTIVE)
+        .pretty();
+    let _subscriber = Registry::default().with(stdout_log);
+
+    // tracing::subscriber::set_global_default(_subscriber).expect("Unable to set global subscriber");
+
+    start().unwrap();
+}
 
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
-fn main() -> eframe::Result<()> {
-    use eframe::NativeOptions;
-    use tracing_subscriber::fmt::format::FmtSpan;
+fn start() -> eframe::Result<()> {
+    use egui::{Style, Visuals};
+    use tracing::{event, Level};
+
+    let span = trace_span!("starting main");
+    let _guard = span.enter();
 
     let rt = Runtime::new().expect("Unable to create Runtime");
     let _enter = rt.enter();
 
-    let stdout_log = tracing_subscriber::fmt::layer()
-        .with_span_events(FmtSpan::ACTIVE)
-        .pretty();
-    let subscriber = Registry::default().with(stdout_log);
-
-    // tracing::subscriber::set_global_default(subscriber).expect("Unable to set global subscriber");
-
-    let mut options = NativeOptions::default();
-    options.maximized = true;
+    event!(Level::TRACE, "establishing  pooled connection");
+    let pool = establish_pooled_connection();
 
     eframe::run_native(
         "Dofus farmer",
-        options,
-        Box::new(|cc| Box::new(MainWindow::new(cc, establish_connection()))),
+        NativeOptions {
+            maximized: true,
+            ..Default::default()
+        },
+        Box::new(|creation_context| {
+            let style = Style {
+                visuals: Visuals::dark(),
+                ..Style::default()
+            };
+            creation_context.egui_ctx.set_style(style);
+            Box::new(MainWindow::new(creation_context, pool))
+        }),
     )
 }
 

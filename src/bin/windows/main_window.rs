@@ -3,10 +3,13 @@ use std::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use diesel::PgConnection;
+use diesel::{
+    r2d2::{ConnectionManager, Pool},
+    PgConnection,
+};
 use egui::{
     CentralPanel, Color32, ColorImage, Context, Frame, InputState, Pos2, Rect, Rounding,
-    TextureHandle, Ui, Vec2, Window,
+    TextureHandle, Ui, Vec2,
 };
 use image::io::Reader;
 use lombok::AllArgsConstructor;
@@ -17,7 +20,11 @@ use crate::database::{
     schema::maps,
 };
 
-enum AsyncStatus<T> {
+use super::items_window::ItemsWindow;
+
+#[derive(Default)]
+pub enum AsyncStatus<T> {
+    #[default]
     Loading,
     Ready(T),
 }
@@ -32,25 +39,35 @@ pub struct MapMinMax {
 
 #[derive(AllArgsConstructor)]
 pub struct Image {
-    handle: TextureHandle,
-    used: bool,
+    pub handle: TextureHandle,
+    pub used: bool,
 }
 
 impl Image {
-    pub fn from_ui_and_index(ctx: &Context, index: u16, zoom: f32) -> Self {
+    pub fn from_path(ctx: &Context, path: &str) -> Self {
         // Images start at 1
-        let color_image = Self::load_image_from_path(&format!(
-            "src/resources/worldmap/{}/{}.jpg",
-            zoom,
-            index + 1
-        ));
-        let handle = ctx.load_texture(format!("map{index}"), color_image, Default::default());
+        let color_image = Self::load_image_from_path(path);
+        let handle = ctx.load_texture(path.to_owned(), color_image, Default::default());
 
         Image::new(handle, true)
     }
 
+    pub fn from_ui_and_index(ctx: &Context, index: u16, zoom: f32) -> Self {
+        // Images start at 1
+        let path = format!("src/resources/images/worldmap/{}/{}.jpg", zoom, index + 1);
+        Self::from_path(ctx, &path)
+    }
+
+    pub fn item_from_id(ctx: &Context, id: i32) -> Self {
+        let path = format!("src/resources/images/items/{}.png", id);
+        Self::from_path(ctx, &path)
+    }
+
     fn load_image_from_path(path: &str) -> ColorImage {
-        println!("Loading file {path}");
+        let span = trace_span!("draw_map_body_loop");
+        let _guard = span.enter();
+
+        // println!("{path}");
         let image = Reader::open(path).unwrap().decode().unwrap();
         let size = [image.width() as _, image.height() as _];
         let image_buffer = image.to_rgba8();
@@ -69,7 +86,7 @@ pub struct MainWindow {
     sub_areas: HashMap<SubArea, Vec<Map>>,
     tx: Sender<(Image, u16, usize)>,
     rx: Receiver<(Image, u16, usize)>,
-    connection: PgConnection,
+    items_window: ItemsWindow,
 }
 
 impl MainWindow {
@@ -86,8 +103,13 @@ impl MainWindow {
         Rect { min, max }
     }
 
-    pub fn new(_: &eframe::CreationContext<'_>, mut connection: PgConnection) -> Self {
+    pub fn new(
+        _: &eframe::CreationContext<'_>,
+        pool: Pool<ConnectionManager<PgConnection>>,
+    ) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+
+        let mut connection = pool.get().unwrap();
 
         let zoom_index = Self::STARTING_ZOOM_INDEX;
         let images_number = Self::image_number_from_zoom(zoom_index);
@@ -146,10 +168,10 @@ impl MainWindow {
             images: HashMap::new(),
             images_number,
             map_min_max,
-            sub_areas: sub_areas,
+            sub_areas,
             tx,
             rx,
-            connection,
+            items_window: ItemsWindow::new(pool),
         }
     }
 
@@ -205,8 +227,6 @@ impl MainWindow {
         let pointer_pos_on_map = pointer_pos.map(|pos| (pos - fullmap_position).to_pos2());
         let pointer_pos_on_map_zoomed =
             pointer_pos_on_map.map(|pos| (pos.to_vec2() / Self::ZOOMS[self.zoom_index]).to_pos2());
-
-        // println!("{:?}", pointer_pos_on_map_zoomed);
 
         // Draw full map images
         self.reset_images_flags();
@@ -403,7 +423,7 @@ impl MainWindow {
             let _guard = span.enter();
 
             let image = Image::from_ui_and_index(&ctx, index, zoom);
-            let _ = tx.send((image, index, zoom_index));
+            tx.send((image, index, zoom_index)).unwrap();
             ctx.request_repaint();
         });
     }
@@ -490,8 +510,6 @@ impl eframe::App for MainWindow {
             .frame(frame)
             .show(ctx, |ui| self.central_panel_ui(ui));
 
-        Window::new("Resources").show(ctx, |_ui| {
-            //
-        });
+        self.items_window.show(ctx);
     }
 }

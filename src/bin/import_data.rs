@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs};
 
-use database::{connection::establish_connection, models::area::Area};
+use database::{connection::establish_pooled_connection, models::area::Area};
 use diesel::{insert_into, PgConnection, QueryResult, RunQueryDsl};
 use serde_json::{from_str, Value};
 
@@ -12,23 +12,25 @@ use crate::database::models::{
 mod database;
 
 fn main() {
-    let mut connection = establish_connection();
+    let pool = establish_pooled_connection();
+    let mut connection = pool.get().unwrap();
+    // let mut connection = establish_connection();
 
     // Recipes.json and Items.json need to change their Nan values to null
     // MapPositions.json need to change his id to integer by removing .0
     // Simple search and replace does the job
     connection
         .build_transaction()
-        .run(|mut connection| {
+        .run(|connection| {
             let name_map = create_name_map();
-            fill_areas(&mut connection, &name_map);
-            fill_sub_areas(&mut connection, &name_map);
-            fill_maps(&mut connection, &name_map);
-            fill_items(&mut connection, &name_map);
-            fill_monsters(&mut connection, &name_map);
-            fill_drops(&mut connection);
-            fill_recipes(&mut connection);
-            fill_monsters_sub_areas(&mut connection);
+            fill_areas(connection, &name_map);
+            fill_sub_areas(connection, &name_map);
+            fill_maps(connection, &name_map);
+            fill_items(connection, &name_map);
+            fill_monsters(connection, &name_map);
+            fill_drops(connection);
+            fill_recipes(connection);
+            fill_monsters_sub_areas(connection);
 
             QueryResult::Ok(())
         })
@@ -53,12 +55,12 @@ fn create_name_map() -> HashMap<u32, String> {
     name_map
 }
 
-fn fill_areas(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
+fn fill_areas(connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
     use crate::database::schema::areas;
 
     println!("Starting fill_areas");
 
-    fill_table("Areas.json", &mut connection, |v, connection| {
+    fill_table("Areas.json", connection, |v, connection| {
         for area in v {
             let area = area.as_object().unwrap();
             let area = Area::new(
@@ -75,12 +77,12 @@ fn fill_areas(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>
     println!("End fill_areas");
 }
 
-fn fill_sub_areas(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
+fn fill_sub_areas(connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
     use crate::database::schema::sub_areas;
 
     println!("Starting fill_sub_areas");
 
-    fill_table("SubAreas.json", &mut connection, |v, connection| {
+    fill_table("SubAreas.json", connection, |v, connection| {
         for sub_area in v {
             let sub_area = sub_area.as_object().unwrap();
             let sub_area = SubArea::new(
@@ -99,12 +101,12 @@ fn fill_sub_areas(mut connection: &mut PgConnection, name_map: &HashMap<u32, Str
     println!("End fill_sub_areas");
 }
 
-fn fill_maps(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
+fn fill_maps(connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
     println!("Starting fill_maps");
 
     use database::schema::maps;
 
-    fill_table("MapPositions.json", &mut connection, |v, connection| {
+    fill_table("MapPositions.json", connection, |v, connection| {
         for map in v {
             let map_object = map.as_object().unwrap();
             let world_map = map_object["worldMap"].as_i64().unwrap();
@@ -113,7 +115,7 @@ fn fill_maps(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>)
                     map_object["id"].as_i64().unwrap() as i32,
                     name_map
                         .get(&(map_object["nameId"].as_u64().unwrap() as u32))
-                        .map(|o| o.clone()),
+                        .cloned(),
                     map_object["posX"].as_i64().unwrap() as i16,
                     map_object["posY"].as_i64().unwrap() as i16,
                     map_object["subAreaId"].as_i64().unwrap() as i32,
@@ -137,35 +139,55 @@ fn fill_maps(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>)
     println!("End fill_maps");
 }
 
-fn fill_items(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
+fn fill_items(connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
     use crate::database::schema::items;
 
     println!("Starting fill_items");
 
-    fill_table("Items.json", &mut connection, |v, connection| {
+    let mut item_types_categories = HashMap::new();
+    {
+        let types: Vec<Value> = from_str(include_str!("../resources/json/ItemTypes.json"))
+            .expect("Can't parse ItemTypes");
+
+        for item_type in types {
+            item_types_categories.insert(
+                item_type["id"].as_u64().unwrap(),
+                item_type["categoryId"].as_i64().unwrap() as i16,
+            );
+        }
+    }
+
+    fill_table("Items.json", connection, |v, connection| {
         for item in v {
             let item = item.as_object().unwrap();
-            let item = Item::new(
-                item["id"].as_i64().unwrap() as i32,
-                name_map[&(item["nameId"].as_u64().unwrap() as u32)].to_owned(),
-            );
+            let category = item_types_categories[&item["typeId"].as_u64().unwrap()];
+            // if [0, 1, 2].contains(&(category as _))
+            //
+            {
+                let item = Item::new(
+                    item["id"].as_i64().unwrap() as _,
+                    name_map[&(item["nameId"].as_u64().unwrap() as _)].to_owned(),
+                    category,
+                    item["iconId"].as_i64().unwrap() as _,
+                );
 
-            insert_into(items::table)
-                .values(item)
-                .execute(connection)
-                .unwrap();
+                insert_into(items::table)
+                    .values(item)
+                    .execute(connection)
+                    .unwrap();
+            }
         }
     });
 
     println!("End fill_items");
 }
 
-fn fill_monsters(mut connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
+fn fill_monsters(connection: &mut PgConnection, name_map: &HashMap<u32, String>) {
     use crate::database::schema::monsters;
 
     println!("Starting fill_monsters");
 
-    fill_table("Monsters.json", &mut connection, |v, connection| {
+    fill_table("Monsters.json", connection, |v, connection| {
         for monster in v {
             let monster = monster.as_object().unwrap();
             let monster = Monster::new(
@@ -183,12 +205,12 @@ fn fill_monsters(mut connection: &mut PgConnection, name_map: &HashMap<u32, Stri
     println!("End fill_monsters");
 }
 
-fn fill_drops(mut connection: &mut PgConnection) {
+fn fill_drops(connection: &mut PgConnection) {
     use crate::database::schema::drops;
 
     println!("Starting fill_drops");
 
-    fill_table("Items.json", &mut connection, |v, connection| {
+    fill_table("Items.json", connection, |v, connection| {
         for item in v {
             let item = item.as_object().unwrap();
             let id = item["id"].as_i64().unwrap() as i32;
@@ -196,7 +218,7 @@ fn fill_drops(mut connection: &mut PgConnection) {
             let mut monster_drop_ids: Vec<_> = item["dropMonsterIds"]
                 .as_array()
                 .unwrap_or(&Vec::new())
-                .into_iter()
+                .iter()
                 .map(|v| v.as_i64().unwrap() as i32)
                 .collect();
 
@@ -220,12 +242,12 @@ fn fill_drops(mut connection: &mut PgConnection) {
     println!("End fill_drops");
 }
 
-fn fill_recipes(mut connection: &mut PgConnection) {
+fn fill_recipes(connection: &mut PgConnection) {
     use crate::database::schema::recipes;
 
     println!("Starting fill_recipes");
 
-    fill_table("Recipes.json", &mut connection, |v, connection| {
+    fill_table("Recipes.json", connection, |v, connection| {
         for recipe in v {
             let recipe = recipe.as_object().unwrap();
 
@@ -256,12 +278,12 @@ fn fill_recipes(mut connection: &mut PgConnection) {
     println!("End fill_recipes");
 }
 
-fn fill_monsters_sub_areas(mut connection: &mut PgConnection) {
+fn fill_monsters_sub_areas(connection: &mut PgConnection) {
     use crate::database::schema::monsters_sub_areas;
 
     println!("Starting fill_monsters_sub_areas");
 
-    fill_table("SubAreas.json", &mut connection, |v, connection| {
+    fill_table("SubAreas.json", connection, |v, connection| {
         for sub_area in v {
             let sub_area = sub_area.as_object().unwrap();
             let id = sub_area["id"].as_i64().unwrap() as i32;
@@ -269,7 +291,7 @@ fn fill_monsters_sub_areas(mut connection: &mut PgConnection) {
             let monster_ids: Vec<_> = sub_area["monsters"]
                 .as_array()
                 .unwrap_or(&Vec::new())
-                .into_iter()
+                .iter()
                 .map(|v| v.as_i64().unwrap() as i32)
                 .collect();
 
@@ -295,14 +317,14 @@ fn fill_monsters_sub_areas(mut connection: &mut PgConnection) {
 
 fn fill_table<F: Fn(&Vec<Value>, &mut PgConnection)>(
     json_file: &str,
-    mut connection: &mut PgConnection,
+    connection: &mut PgConnection,
     function: F,
 ) {
     let json: Value = from_str(&read_file(&("src/resources/json/".to_owned() + json_file)))
-        .expect(&format!("Can't parse {json_file}"));
+        .unwrap_or_else(|_| panic!("Can't parse {json_file}"));
     let json = json.as_array().unwrap();
 
-    function(json, &mut connection);
+    function(json, connection);
     // for value in json {
     //     function(value, &mut connection);
     // }

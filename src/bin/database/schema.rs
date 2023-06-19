@@ -18,6 +18,8 @@ diesel::table! {
     items (id) {
         id -> Int4,
         name -> Varchar,
+        category -> Int2,
+        image_id -> Int4,
     }
 }
 
