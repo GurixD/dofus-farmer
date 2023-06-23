@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
-    sync::mpsc::{Receiver, Sender},
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::mpsc::{self, Receiver, Sender},
 };
 
 use diesel::{
@@ -13,18 +14,26 @@ use egui::{
 };
 use image::io::Reader;
 use lombok::AllArgsConstructor;
-use tracing::trace_span;
+use tracing::{trace_span, warn};
 
 use crate::database::{
-    models::{map::Map, sub_area::SubArea},
+    models::{
+        drop::Drop,
+        item::Item,
+        map::Map,
+        monster::{self, Monster},
+        monster_sub_area::MonsterSubArea,
+        recipe::Recipe,
+        sub_area::SubArea,
+    },
     schema::maps,
 };
 
 use super::items_window::ItemsWindow;
 
-#[derive(Default)]
+#[derive(Clone)]
 pub enum AsyncStatus<T> {
-    #[default]
+    None,
     Loading,
     Ready(T),
 }
@@ -37,7 +46,7 @@ pub struct MapMinMax {
     y_max: i16,
 }
 
-#[derive(AllArgsConstructor)]
+#[derive(AllArgsConstructor, Clone)]
 pub struct Image {
     pub handle: TextureHandle,
     pub used: bool,
@@ -58,8 +67,13 @@ impl Image {
         Self::from_path(ctx, &path)
     }
 
-    pub fn item_from_id(ctx: &Context, id: i32) -> Self {
-        let path = format!("src/resources/images/items/{}.png", id);
+    pub fn item_from_image_id(ctx: &Context, id: i32) -> Self {
+        let path = format!("src/resources/images/items/{id}.png");
+        Self::from_path(ctx, &path)
+    }
+
+    pub fn monster_from_id(ctx: &Context, id: i32) -> Self {
+        let path = format!("src/resources/images/monsters/{id}.png");
         Self::from_path(ctx, &path)
     }
 
@@ -76,17 +90,54 @@ impl Image {
     }
 }
 
+pub type ItemsRelations = HashMap<
+    Rc<Item>, // item to craft
+    (
+        usize, // quantity
+        AsyncStatus<
+            HashMap<
+                Rc<Item>, // one of the resources needed to make it
+                (
+                    usize,                                  // quantity needed
+                    usize,                                  // quantity in inventory
+                    HashMap<Rc<Monster>, HashSet<SubArea>>, // monsters and their image + sub areas
+                ),
+            >,
+        >,
+    ),
+>;
+
 pub struct MainWindow {
     zoom_index: usize,
     map_position: Pos2,
     clicked_position: Option<Pos2>,
-    images: HashMap<(u16, usize), AsyncStatus<Image>>,
+    maps_images: HashMap<(u16, usize), AsyncStatus<Image>>,
     images_number: (u8, u8),
     map_min_max: MapMinMax,
     sub_areas: HashMap<SubArea, Vec<Map>>,
-    tx: Sender<(Image, u16, usize)>,
-    rx: Receiver<(Image, u16, usize)>,
+    map_tx: Sender<(Image, u16, usize)>,
+    map_rx: Receiver<(Image, u16, usize)>,
+    item_tx: Sender<(Item, usize)>,
+    item_rx: Receiver<(Item, usize)>,
+    item_ingredients_tx: Sender<(
+        Item,
+        usize,
+        HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
+    )>,
+    item_ingredients_rx: Receiver<(
+        Item,
+        usize,
+        HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
+    )>,
+    item_image_tx: Sender<(Item, Image)>,
+    item_image_rx: Receiver<(Item, Image)>,
+    items_images: HashMap<Rc<Item>, AsyncStatus<Image>>,
+    monster_image_tx: Sender<(Monster, Image)>,
+    monster_image_rx: Receiver<(Monster, Image)>,
+    monsters_images: HashMap<Rc<Monster>, AsyncStatus<Image>>,
+    items: ItemsRelations,
     items_window: ItemsWindow,
+    pool: Pool<ConnectionManager<PgConnection>>,
 }
 
 impl MainWindow {
@@ -95,6 +146,7 @@ impl MainWindow {
     const ZOOMS: [f32; 5] = [0.2, 0.4, 0.6, 0.8, 1f32];
     const STARTING_ZOOM_INDEX: usize = 4;
     const MAPS_RECT: Rect = Self::init_map_rect();
+    pub const ITEM_IMAGE_SIZE: Vec2 = Vec2 { x: 60f32, y: 60f32 };
 
     const fn init_map_rect() -> Rect {
         let min = Pos2::new(360f32, 320f32);
@@ -107,7 +159,11 @@ impl MainWindow {
         _: &eframe::CreationContext<'_>,
         pool: Pool<ConnectionManager<PgConnection>>,
     ) -> Self {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (map_tx, map_rx) = mpsc::channel();
+        let (item_tx, item_rx) = mpsc::channel();
+        let (item_ingredients_tx, item_ingredients_rx) = mpsc::channel();
+        let (item_image_tx, item_image_rx) = mpsc::channel();
+        let (monster_image_tx, monster_image_rx) = mpsc::channel();
 
         let mut connection = pool.get().unwrap();
 
@@ -138,7 +194,6 @@ impl MainWindow {
             use crate::database::schema::sub_areas;
             use diesel::prelude::*;
 
-            // TODO ignore sub areas without maps
             let sub_areas = sub_areas::table
                 .select(SubArea::as_select())
                 .load(&mut connection)
@@ -161,17 +216,34 @@ impl MainWindow {
             maps_per_sub_area
         };
 
+        let maps_images = HashMap::new();
+        let items = HashMap::new();
+        let items_images = HashMap::new();
+        let monsters_images = HashMap::new();
+
         Self {
             zoom_index,
             map_position: Pos2::ZERO,
             clicked_position: None,
-            images: HashMap::new(),
+            maps_images,
             images_number,
             map_min_max,
             sub_areas,
-            tx,
-            rx,
-            items_window: ItemsWindow::new(pool),
+            map_tx,
+            map_rx,
+            item_tx,
+            item_rx,
+            item_ingredients_tx,
+            item_ingredients_rx,
+            item_image_tx,
+            item_image_rx,
+            items_images,
+            monster_image_tx,
+            monster_image_rx,
+            monsters_images,
+            items,
+            items_window: ItemsWindow::new(pool.clone()),
+            pool,
         }
     }
 
@@ -189,7 +261,7 @@ impl MainWindow {
             && (0..self.images_number.1 as i8).contains(&y_index)
         {
             let index = y_index as u16 * self.images_number.0 as u16 + x_index as u16;
-            if let Some(image_status) = self.images.get_mut(&(index, self.zoom_index)) {
+            if let Some(image_status) = self.maps_images.get_mut(&(index, self.zoom_index)) {
                 if let AsyncStatus::Ready(image) = image_status {
                     let pos = Pos2::new(x as f32, y as f32);
 
@@ -203,9 +275,9 @@ impl MainWindow {
                     image.used = true;
                 }
             } else {
-                self.images
+                self.maps_images
                     .insert((index, self.zoom_index), AsyncStatus::Loading);
-                self.load_image(ui.ctx().clone(), index);
+                self.load_map_image(ui.ctx().clone(), index);
             }
         }
     }
@@ -392,7 +464,7 @@ impl MainWindow {
         let span = trace_span!("reset_images_flags");
         let _guard = span.enter();
 
-        self.images.iter_mut().for_each(|(_, image_status)| {
+        self.maps_images.iter_mut().for_each(|(_, image_status)| {
             if let AsyncStatus::Ready(ref mut image) = image_status {
                 image.used = false;
             }
@@ -403,7 +475,7 @@ impl MainWindow {
         let span = trace_span!("check_images_flags");
         let _guard = span.enter();
 
-        self.images.retain(|_, image_status| {
+        self.maps_images.retain(|_, image_status| {
             if let AsyncStatus::Ready(ref image) = image_status {
                 return image.used;
             }
@@ -411,32 +483,237 @@ impl MainWindow {
         });
     }
 
-    fn load_image(&mut self, ctx: Context, index: u16) {
-        let span = trace_span!("load_image");
+    fn load_map_image(&mut self, ctx: Context, index: u16) {
+        let span = trace_span!("load_map_image");
         let _guard = span.enter();
 
-        let tx = self.tx.clone();
+        let tx = self.map_tx.clone();
         let zoom_index = self.zoom_index;
         let zoom = Self::ZOOMS[zoom_index];
         tokio::spawn(async move {
-            let span = trace_span!("load_image inner async");
-            let _guard = span.enter();
-
             let image = Image::from_ui_and_index(&ctx, index, zoom);
             tx.send((image, index, zoom_index)).unwrap();
             ctx.request_repaint();
         });
     }
 
-    fn check_for_new_images(&mut self) {
+    fn load_item_image(tx: Sender<(Item, Image)>, ctx: Context, item: Item) {
+        let span = trace_span!("load_item_image");
+        let _guard = span.enter();
+
+        tokio::spawn(async move {
+            let image = Image::item_from_image_id(&ctx, item.image_id);
+            tx.send((item, image)).unwrap();
+            ctx.request_repaint();
+        });
+    }
+
+    fn load_monster_image(tx: Sender<(Monster, Image)>, ctx: Context, monster: Monster) {
+        let span = trace_span!("load_item_image");
+        let _guard = span.enter();
+
+        tokio::spawn(async move {
+            let image = Image::monster_from_id(&ctx, monster.id);
+            tx.send((monster, image)).unwrap();
+            ctx.request_repaint();
+        });
+    }
+
+    fn check_for_new_map_images(&mut self) {
         let span = trace_span!("check_for_new_images");
         let _guard = span.enter();
 
-        self.rx.try_iter().for_each(|(image, index, zoom_index)| {
-            if zoom_index == self.zoom_index {
-                self.images
-                    .insert((index, self.zoom_index), AsyncStatus::Ready(image));
+        self.map_rx
+            .try_iter()
+            .for_each(|(image, index, zoom_index)| {
+                if zoom_index == self.zoom_index {
+                    self.maps_images
+                        .insert((index, self.zoom_index), AsyncStatus::Ready(image));
+                }
+            });
+    }
+
+    fn check_for_new_items(&mut self) {
+        self.item_rx.try_iter().for_each(|(item, quantity)| {
+            if let Some(item_value) = self.items.get_mut(&item) {
+                item_value.0 += quantity;
+            } else {
+                self.items
+                    .insert(Rc::new(item.clone()), (quantity, AsyncStatus::Loading));
+                Self::get_all_related(
+                    self.item_ingredients_tx.clone(),
+                    self.pool.clone(),
+                    item,
+                    quantity,
+                );
             }
+        });
+    }
+
+    fn check_for_new_item_ingredients(&mut self, ctx: &Context) {
+        self.item_ingredients_rx
+            .try_iter()
+            .for_each(|(item, _, ingredients)| {
+                if let Some((quantity, loading_ingredients)) = self.items.get_mut(&item) {
+                    let ingredients_rc: HashMap<_, _> = ingredients
+                        .into_iter()
+                        .map(|(ingredient, (quantity, monsters_sub_area))| {
+                            let ingredient_rc = if let Some((ingredient, _)) =
+                                self.items_images.get_key_value(&ingredient)
+                            {
+                                Rc::clone(ingredient)
+                            } else {
+                                Self::load_item_image(
+                                    self.item_image_tx.clone(),
+                                    ctx.clone(),
+                                    ingredient.clone(),
+                                );
+                                let ingredient = Rc::new(ingredient);
+                                self.items_images
+                                    .insert(Rc::clone(&ingredient), AsyncStatus::Loading);
+                                ingredient
+                            };
+
+                            let monsters_rc: HashMap<_, _> = monsters_sub_area
+                                .into_iter()
+                                .map(|(monster, sub_areas)| {
+                                    let monster = if let Some((monster, _)) =
+                                        self.monsters_images.get_key_value(&monster)
+                                    {
+                                        Rc::clone(monster)
+                                    } else {
+                                        Self::load_monster_image(
+                                            self.monster_image_tx.clone(),
+                                            ctx.clone(),
+                                            monster.clone(),
+                                        );
+                                        let monster = Rc::new(monster);
+                                        self.monsters_images
+                                            .insert(Rc::clone(&monster), AsyncStatus::Loading);
+                                        monster
+                                    };
+
+                                    (monster, sub_areas)
+                                })
+                                .collect();
+                            (ingredient_rc, (quantity, 0usize, monsters_rc))
+                        })
+                        .collect();
+                    *loading_ingredients = AsyncStatus::Ready(ingredients_rc);
+                } else {
+                    warn!("new item ingredients empty item");
+                }
+            });
+    }
+
+    fn check_for_new_items_images(&mut self) {
+        self.item_image_rx.try_iter().for_each(|(item, image)| {
+            if let Some(loading_image) = self.items_images.get_mut(&item) {
+                *loading_image = AsyncStatus::Ready(image);
+            }
+        });
+    }
+
+    fn check_for_new_monsters_images(&mut self) {
+        self.monster_image_rx
+            .try_iter()
+            .for_each(|(monster, image)| {
+                if let Some(loading_image) = self.monsters_images.get_mut(&monster) {
+                    *loading_image = AsyncStatus::Ready(image);
+                }
+            });
+    }
+
+    fn get_all_related(
+        tx: Sender<(
+            Item,
+            usize,
+            HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
+        )>,
+        pool: Pool<ConnectionManager<PgConnection>>,
+        item: Item,
+        quantity: usize,
+    ) {
+        tokio::spawn(async move {
+            use crate::database::schema::*;
+            use diesel::prelude::*;
+
+            let mut connection = pool.get().unwrap();
+            let (items_result, items_ingredient) =
+                diesel::alias!(items as items_result, items as items_ingredient);
+
+            let mut ingredients_quantity = HashMap::new();
+            let mut items_to_make = vec![(item.clone(), 1)];
+
+            while !items_to_make.is_empty() {
+                let (item, quantity) = items_to_make.pop().unwrap();
+
+                let result: Vec<(Item, Recipe, Item)> = items_result
+                    .inner_join(
+                        recipes::table
+                            .on(items_result.field(items::id).eq(recipes::result_item_id)),
+                    )
+                    .inner_join(
+                        items_ingredient.on(items_ingredient
+                            .field(items::id)
+                            .eq(recipes::ingredient_item_id)),
+                    )
+                    .filter(items_result.field(items::id).eq(item.id))
+                    .load(&mut connection)
+                    .unwrap();
+
+                if result.is_empty() {
+                    ingredients_quantity
+                        .entry(item)
+                        .and_modify(|current_quantity| *current_quantity += quantity)
+                        .or_insert(quantity);
+                } else {
+                    items_to_make.extend(result.into_iter().map(
+                        |(_, recipe, items_ingredient)| (items_ingredient, recipe.quantity as _),
+                    ));
+                }
+            }
+
+            let mut result_hash_map: HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)> =
+                HashMap::new();
+
+            ingredients_quantity
+                .iter()
+                .for_each(|(ingredient, quantity)| {
+                    let result: Vec<(SubArea, MonsterSubArea, Monster, Drop, Item)> =
+                        sub_areas::table
+                            .inner_join(
+                                monsters_sub_areas::table
+                                    .on(sub_areas::id.eq(monsters_sub_areas::sub_area_id)),
+                            )
+                            .inner_join(
+                                monsters::table.on(monsters_sub_areas::monster_id.eq(monsters::id)),
+                            )
+                            .inner_join(drops::table.on(monsters::id.eq(drops::monster_id)))
+                            .inner_join(items::table.on(drops::item_id.eq(items::id)))
+                            .filter(items::id.eq(ingredient.id))
+                            .load(&mut connection)
+                            .unwrap();
+
+                    result_hash_map.insert(ingredient.clone(), (*quantity, Default::default()));
+                    let mut sub_areas_for_monsters: HashMap<Monster, HashSet<SubArea>> =
+                        HashMap::new();
+
+                    result.into_iter().for_each(|(sub_area, _, monster, _, _)| {
+                        //
+                        sub_areas_for_monsters
+                            .entry(monster)
+                            .and_modify(|sub_areas| {
+                                sub_areas.insert(sub_area);
+                            });
+                    });
+
+                    let tmp = result_hash_map.get_mut(&ingredient).unwrap();
+                    tmp.1 = sub_areas_for_monsters;
+                });
+
+            // send
+            tx.send((item, quantity, result_hash_map)).unwrap();
         });
     }
 
@@ -455,7 +732,7 @@ impl MainWindow {
     fn update_zoom(&mut self, zoom_index: usize, pointer_pos: Pos2) {
         let old_zoom_index = self.zoom_index;
 
-        self.images.clear();
+        self.maps_images.clear();
         self.zoom_index = zoom_index;
         self.images_number = Self::image_number_from_zoom(zoom_index);
 
@@ -478,38 +755,17 @@ impl eframe::App for MainWindow {
         let span = trace_span!("update");
         let _guard = span.enter();
 
-        let _images_loaded_length = self
-            .images
-            .iter()
-            .filter(|(_, image_status)| {
-                if let AsyncStatus::Ready(_) = image_status {
-                    return true;
-                }
-
-                false
-            })
-            .count();
-
-        let _images_loading_length = self
-            .images
-            .iter()
-            .filter(|(_, image_status)| {
-                if let AsyncStatus::Ready(_) = image_status {
-                    return false;
-                }
-
-                true
-            })
-            .count();
-
-        // println!("{_images_loaded_length} images loaded, {_images_loading_length} images loading");
-        self.check_for_new_images();
+        self.check_for_new_items();
+        self.check_for_new_item_ingredients(ctx);
+        self.check_for_new_items_images();
+        self.check_for_new_monsters_images();
+        self.check_for_new_map_images();
 
         let frame = Frame::default().fill(Color32::from_rgb(30, 25, 25));
         CentralPanel::default()
             .frame(frame)
             .show(ctx, |ui| self.central_panel_ui(ui));
 
-        self.items_window.show(ctx);
+        self.items_window.show(ctx, &self.items);
     }
 }
