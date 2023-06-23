@@ -18,13 +18,8 @@ use tracing::{trace_span, warn};
 
 use crate::database::{
     models::{
-        drop::Drop,
-        item::Item,
-        map::Map,
-        monster::{self, Monster},
-        monster_sub_area::MonsterSubArea,
-        recipe::Recipe,
-        sub_area::SubArea,
+        drop::Drop, item::Item, map::Map, monster::Monster, monster_sub_area::MonsterSubArea,
+        recipe::Recipe, sub_area::SubArea,
     },
     schema::maps,
 };
@@ -33,7 +28,6 @@ use super::items_window::ItemsWindow;
 
 #[derive(Clone)]
 pub enum AsyncStatus<T> {
-    None,
     Loading,
     Ready(T),
 }
@@ -107,6 +101,12 @@ pub type ItemsRelations = HashMap<
     ),
 >;
 
+type Ingredients = (
+    Item,
+    usize,
+    HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
+);
+
 pub struct MainWindow {
     zoom_index: usize,
     map_position: Pos2,
@@ -117,18 +117,9 @@ pub struct MainWindow {
     sub_areas: HashMap<SubArea, Vec<Map>>,
     map_tx: Sender<(Image, u16, usize)>,
     map_rx: Receiver<(Image, u16, usize)>,
-    item_tx: Sender<(Item, usize)>,
     item_rx: Receiver<(Item, usize)>,
-    item_ingredients_tx: Sender<(
-        Item,
-        usize,
-        HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
-    )>,
-    item_ingredients_rx: Receiver<(
-        Item,
-        usize,
-        HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
-    )>,
+    item_ingredients_tx: Sender<Ingredients>,
+    item_ingredients_rx: Receiver<Ingredients>,
     item_image_tx: Sender<(Item, Image)>,
     item_image_rx: Receiver<(Item, Image)>,
     items_images: HashMap<Rc<Item>, AsyncStatus<Image>>,
@@ -221,6 +212,8 @@ impl MainWindow {
         let items_images = HashMap::new();
         let monsters_images = HashMap::new();
 
+        let items_window = ItemsWindow::new(pool.clone(), item_tx);
+
         Self {
             zoom_index,
             map_position: Pos2::ZERO,
@@ -231,7 +224,6 @@ impl MainWindow {
             sub_areas,
             map_tx,
             map_rx,
-            item_tx,
             item_rx,
             item_ingredients_tx,
             item_ingredients_rx,
@@ -242,7 +234,7 @@ impl MainWindow {
             monster_image_rx,
             monsters_images,
             items,
-            items_window: ItemsWindow::new(pool.clone()),
+            items_window,
             pool,
         }
     }
@@ -533,13 +525,25 @@ impl MainWindow {
             });
     }
 
-    fn check_for_new_items(&mut self) {
+    fn check_for_new_items(&mut self, ctx: &Context) {
         self.item_rx.try_iter().for_each(|(item, quantity)| {
             if let Some(item_value) = self.items.get_mut(&item) {
                 item_value.0 += quantity;
             } else {
-                self.items
-                    .insert(Rc::new(item.clone()), (quantity, AsyncStatus::Loading));
+                let item_rc = Rc::new(item.clone());
+
+                self.items_images
+                    .entry(Rc::clone(&item_rc))
+                    .or_insert_with(|| {
+                        Self::load_item_image(
+                            self.item_image_tx.clone(),
+                            ctx.clone(),
+                            item.clone(),
+                        );
+                        AsyncStatus::Loading
+                    });
+
+                self.items.insert(item_rc, (quantity, AsyncStatus::Loading));
                 Self::get_all_related(
                     self.item_ingredients_tx.clone(),
                     self.pool.clone(),
@@ -554,7 +558,7 @@ impl MainWindow {
         self.item_ingredients_rx
             .try_iter()
             .for_each(|(item, _, ingredients)| {
-                if let Some((quantity, loading_ingredients)) = self.items.get_mut(&item) {
+                if let Some((_, loading_ingredients)) = self.items.get_mut(&item) {
                     let ingredients_rc: HashMap<_, _> = ingredients
                         .into_iter()
                         .map(|(ingredient, (quantity, monsters_sub_area))| {
@@ -625,11 +629,7 @@ impl MainWindow {
     }
 
     fn get_all_related(
-        tx: Sender<(
-            Item,
-            usize,
-            HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
-        )>,
+        tx: Sender<Ingredients>,
         pool: Pool<ConnectionManager<PgConnection>>,
         item: Item,
         quantity: usize,
@@ -700,16 +700,26 @@ impl MainWindow {
                         HashMap::new();
 
                     result.into_iter().for_each(|(sub_area, _, monster, _, _)| {
-                        //
                         sub_areas_for_monsters
                             .entry(monster)
                             .and_modify(|sub_areas| {
+                                sub_areas.insert(sub_area.clone());
+                            })
+                            .or_insert_with(|| {
+                                let mut sub_areas = HashSet::new();
                                 sub_areas.insert(sub_area);
+                                sub_areas
                             });
                     });
 
-                    let tmp = result_hash_map.get_mut(&ingredient).unwrap();
-                    tmp.1 = sub_areas_for_monsters;
+                    //TODO
+                    result_hash_map
+                        .entry(ingredient.clone())
+                        .and_modify(|(_, monsters)| {
+                            *monsters = sub_areas_for_monsters;
+                        });
+                    // let tmp = result_hash_map.get_mut(ingredient).unwrap();
+                    // tmp.1 = sub_areas_for_monsters;
                 });
 
             // send
@@ -755,7 +765,7 @@ impl eframe::App for MainWindow {
         let span = trace_span!("update");
         let _guard = span.enter();
 
-        self.check_for_new_items();
+        self.check_for_new_items(ctx);
         self.check_for_new_item_ingredients(ctx);
         self.check_for_new_items_images();
         self.check_for_new_monsters_images();
@@ -766,6 +776,7 @@ impl eframe::App for MainWindow {
             .frame(frame)
             .show(ctx, |ui| self.central_panel_ui(ui));
 
-        self.items_window.show(ctx, &self.items);
+        self.items_window
+            .show(ctx, &self.items, &self.items_images, &self.monsters_images);
     }
 }

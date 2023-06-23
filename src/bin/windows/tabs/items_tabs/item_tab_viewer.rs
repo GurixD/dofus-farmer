@@ -1,17 +1,32 @@
+use std::{collections::HashMap, rc::Rc};
+
 use egui::Ui;
 use egui_dock::TabViewer;
 
-use crate::windows::main_window::ItemsRelations;
+use crate::{
+    database::models::{item::Item, monster::Monster},
+    windows::main_window::{AsyncStatus, Image, ItemsRelations},
+};
 
 use super::item_tabs_data::ItemTabsData;
 
 pub struct ItemTabsViewer<'a> {
-    pub items: &'a ItemsRelations,
+    items: &'a ItemsRelations,
+    items_images: &'a HashMap<Rc<Item>, AsyncStatus<Image>>,
+    monsters_images: &'a HashMap<Rc<Monster>, AsyncStatus<Image>>,
 }
 
 impl<'a> ItemTabsViewer<'a> {
-    pub fn new(items: &'a ItemsRelations) -> Self {
-        Self { items }
+    pub fn new(
+        items: &'a ItemsRelations,
+        items_images: &'a HashMap<Rc<Item>, AsyncStatus<Image>>,
+        monsters_images: &'a HashMap<Rc<Monster>, AsyncStatus<Image>>,
+    ) -> Self {
+        Self {
+            items,
+            items_images,
+            monsters_images,
+        }
     }
 }
 
@@ -21,9 +36,9 @@ impl<'a> TabViewer for ItemTabsViewer<'a> {
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
         match tab {
             ItemTabsData::SearchItem(tab) => tab.show(ui),
-            ItemTabsData::WishList(tab) => tab.show(ui, &self.items),
-            ItemTabsData::Resources(tab) => tab.show(ui, &self.items),
-            ItemTabsData::Monsters(tab) => tab.show(ui, &self.items),
+            ItemTabsData::WishList(tab) => tab.show(ui, self.items, self.items_images),
+            ItemTabsData::Resources(tab) => tab.show(ui, self.items, self.items_images),
+            ItemTabsData::Monsters(tab) => tab.show(ui, self.items, self.monsters_images),
         }
     }
 

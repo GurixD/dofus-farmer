@@ -1,26 +1,20 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        self,
-        mpsc::{Receiver, Sender},
-    },
+use std::sync::{
+    self,
+    mpsc::{Receiver, Sender},
 };
 
 use diesel::{
     r2d2::{ConnectionManager, Pool},
     PgConnection,
 };
-use egui::{Context, ImageButton, PointerButton, TextEdit, Ui};
+use egui::{Context, ImageButton, TextEdit, Ui};
 use egui_modal::Modal;
 use itertools::Itertools;
-use tokio::{sync::broadcast, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tracing::trace_span;
 
 use crate::{
-    database::models::{
-        drop::Drop, item::Item, monster::Monster, monster_sub_area::MonsterSubArea, recipe::Recipe,
-        sub_area::SubArea,
-    },
+    database::models::item::Item,
     windows::main_window::{AsyncStatus, Image, MainWindow},
 };
 
@@ -32,7 +26,7 @@ pub struct SearchItemTab {
     items_rx: Receiver<(String, Vec<Item>)>,
     item_image_tx: Sender<(usize, Image)>,
     item_image_rx: Receiver<(usize, Image)>,
-    new_item_tx: broadcast::Sender<(Item, usize)>,
+    item_clicked_tx: Sender<(Item, usize)>,
     current_search_thread: Option<(String, JoinHandle<()>)>,
 }
 
@@ -41,7 +35,7 @@ impl SearchItemTab {
 
     pub fn new(
         pool: Pool<ConnectionManager<PgConnection>>,
-        new_item_tx: broadcast::Sender<(Item, usize)>,
+        item_clicked_tx: Sender<(Item, usize)>,
     ) -> Self {
         let search_bar_text = Default::default();
         let items = Default::default();
@@ -57,7 +51,7 @@ impl SearchItemTab {
             items_rx,
             item_image_tx,
             item_image_rx,
-            new_item_tx,
+            item_clicked_tx,
             current_search_thread,
         }
     }
@@ -116,13 +110,8 @@ impl SearchItemTab {
                     let response = ui.add(button);
                     let response = response.on_hover_text(&item.0.name);
 
-                    // if response.clicked_by(PointerButton::Primary) {
-                    //     self.get_all_related(item.0.clone(), 1);
-                    // }
                     if response.clicked_by(egui::PointerButton::Primary) {
-                        self.new_item_tx.send((item.0.clone(), 1)).unwrap();
-                    } else if response.clicked_by(egui::PointerButton::Secondary) {
-                        quantity_modal.open();
+                        self.item_clicked_tx.send((item.0.clone(), 1)).unwrap();
                     }
                 }
             });

@@ -27,7 +27,7 @@ fn main() {
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn start() -> eframe::Result<()> {
-    use egui::{Style, Visuals};
+    use egui::{FontId, Style, Visuals};
     use tracing::{event, Level};
 
     let span = trace_span!("starting main");
@@ -48,8 +48,10 @@ fn start() -> eframe::Result<()> {
         Box::new(|creation_context| {
             let style = Style {
                 visuals: Visuals::dark(),
+                override_font_id: Some(FontId::proportional(17f32)),
                 ..Style::default()
             };
+
             creation_context.egui_ctx.set_style(style);
             Box::new(MainWindow::new(creation_context, pool))
         }),
