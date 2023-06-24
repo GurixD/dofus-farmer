@@ -350,7 +350,18 @@ impl MainWindow {
                         self.map_rect_on_pos(ui, map.x as _, map.y as _, fullmap_position, None);
                     });
 
-                    self.current_sub_area = Some(sub_area.0.clone());
+                    if self.items.iter().any(|(_, (_, ingredients))| {
+                        if let AsyncStatus::Ready(ingredients) = ingredients {
+                            return ingredients.iter().any(|(_, (_, _, monsters))| {
+                                monsters
+                                    .iter()
+                                    .any(|(_, sub_areas)| sub_areas.contains(sub_area.0))
+                            });
+                        }
+                        false
+                    }) {
+                        self.current_sub_area = Some(sub_area.0.clone());
+                    }
                 }
             }
         }
