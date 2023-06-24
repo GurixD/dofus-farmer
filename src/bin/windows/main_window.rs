@@ -135,7 +135,7 @@ impl MainWindow {
     const IMAGE_SIZE: Vec2 = Vec2::new(250f32, 250f32);
     const FULL_IMAGE_SIZE: Vec2 = Vec2::new(10000f32, 8000f32);
     const ZOOMS: [f32; 5] = [0.2, 0.4, 0.6, 0.8, 1f32];
-    const STARTING_ZOOM_INDEX: usize = 4;
+    const STARTING_ZOOM_INDEX: usize = 0;
     const MAPS_RECT: Rect = Self::init_map_rect();
     pub const ITEM_IMAGE_SIZE: Vec2 = Vec2 { x: 60f32, y: 60f32 };
 
@@ -275,9 +275,6 @@ impl MainWindow {
     }
 
     fn central_panel_ui(&mut self, ui: &Ui) {
-        let span = trace_span!("central_panel_ui");
-        let _guard = span.enter();
-
         let ctx = ui.ctx();
         let ui_contains_pointer = ui.ui_contains_pointer();
         let pointer_pos = ui.input(|input_state| self.on_input(input_state, ui_contains_pointer));
@@ -345,17 +342,31 @@ impl MainWindow {
 
                 if let Some(sub_area) = sub_area {
                     sub_area.1.iter().for_each(|map| {
-                        self.map_rect_on_pos(
-                            ui,
-                            map.x as f32,
-                            map.y as f32,
-                            fullmap_position,
-                            None,
-                        );
+                        self.map_rect_on_pos(ui, map.x as _, map.y as _, fullmap_position, None);
                     });
                 }
             }
         }
+        
+        let mut sub_areas_to_draw = HashSet::new();
+        self.items.iter().for_each(|(_, (_, ingredients))| {
+            if let AsyncStatus::Ready(ingredients) = ingredients {
+                ingredients.iter().for_each(|(_, (_, _, monsters))| {
+                    monsters.iter().for_each(|(_, sub_areas)| {
+                        sub_areas_to_draw.extend(sub_areas);
+                    });
+                });
+            }
+        });
+
+        self.sub_areas
+            .iter()
+            .filter(|(sub_area, _)| sub_areas_to_draw.contains(sub_area))
+            .for_each(|(_, maps)| {
+                maps.iter().for_each(|map| {
+                    self.map_rect_on_pos(ui, map.x as _, map.y as _, fullmap_position, None);
+                });
+            });
     }
 
     fn map_rect_on_index(
@@ -712,17 +723,13 @@ impl MainWindow {
                             });
                     });
 
-                    //TODO
                     result_hash_map
                         .entry(ingredient.clone())
                         .and_modify(|(_, monsters)| {
                             *monsters = sub_areas_for_monsters;
                         });
-                    // let tmp = result_hash_map.get_mut(ingredient).unwrap();
-                    // tmp.1 = sub_areas_for_monsters;
                 });
 
-            // send
             tx.send((item, quantity, result_hash_map)).unwrap();
         });
     }
