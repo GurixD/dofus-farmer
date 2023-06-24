@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    database::models::item::Item,
+    database::models::{item::Item, sub_area::SubArea},
     windows::main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
 };
 
@@ -22,6 +22,7 @@ impl ResourcesTab {
         ui: &mut Ui,
         items: &ItemsRelations,
         items_images: &HashMap<Rc<Item>, AsyncStatus<Image>>,
+        current_sub_area: &Option<SubArea>,
     ) {
         let mut ingredients_total = BTreeMap::new();
 
@@ -29,14 +30,23 @@ impl ResourcesTab {
             if let AsyncStatus::Ready(ingredients) = ingredients {
                 ingredients
                     .iter()
-                    .for_each(|(ingredient, (needed, in_inventory, _))| {
-                        ingredients_total
-                            .entry(ingredient)
-                            .and_modify(|(needed_total, in_inventory_total)| {
-                                *needed_total += needed * quantity;
-                                *in_inventory_total += in_inventory;
-                            })
-                            .or_insert_with(|| (*needed * quantity, *in_inventory));
+                    .for_each(|(ingredient, (needed, in_inventory, monsters))| {
+                        let show_this = if let Some(sub_area) = current_sub_area {
+                            monsters
+                                .iter()
+                                .any(|(_, sub_areas)| sub_areas.contains(sub_area))
+                        } else {
+                            true
+                        };
+                        if show_this {
+                            ingredients_total
+                                .entry(ingredient)
+                                .and_modify(|(needed_total, in_inventory_total)| {
+                                    *needed_total += needed * quantity;
+                                    *in_inventory_total += in_inventory;
+                                })
+                                .or_insert_with(|| (*needed * quantity, *in_inventory));
+                        }
                     });
             }
         });

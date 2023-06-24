@@ -6,7 +6,7 @@ use std::{
 use egui::{ImageButton, Ui};
 
 use crate::{
-    database::models::monster::Monster,
+    database::models::{monster::Monster, sub_area::SubArea},
     windows::main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
 };
 
@@ -22,6 +22,7 @@ impl MonstersTab {
         ui: &mut Ui,
         items: &ItemsRelations,
         monsters_images: &HashMap<Rc<Monster>, AsyncStatus<Image>>,
+        current_sub_area: &Option<SubArea>,
     ) {
         let mut all_monsters = BTreeSet::new();
 
@@ -30,7 +31,15 @@ impl MonstersTab {
                 ingredients.iter().for_each(|(_, (_, _, monsters))| {
                     let monsters: BTreeSet<_> = monsters
                         .iter()
-                        .map(|(monster, _)| monster.as_ref())
+                        .filter_map(|(monster, sub_areas)| {
+                            if let Some(sub_area) = current_sub_area {
+                                if !sub_areas.contains(sub_area) {
+                                    return None;
+                                }
+                            }
+
+                            Some(monster.as_ref())
+                        })
                         .collect();
 
                     all_monsters.extend(monsters);

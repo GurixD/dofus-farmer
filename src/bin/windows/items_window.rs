@@ -8,7 +8,7 @@ use egui::{Context, Vec2, Window};
 use egui_dock::{DockArea, NodeIndex, Style, Tree};
 use tracing::trace_span;
 
-use crate::database::models::{item::Item, monster::Monster};
+use crate::database::models::{item::Item, monster::Monster, sub_area::SubArea};
 
 use super::{
     main_window::{AsyncStatus, Image, ItemsRelations},
@@ -51,6 +51,7 @@ impl ItemsWindow {
         items: &ItemsRelations,
         items_images: &HashMap<Rc<Item>, AsyncStatus<Image>>,
         monsters_images: &HashMap<Rc<Monster>, AsyncStatus<Image>>,
+        current_sub_area: &Option<SubArea>,
     ) {
         Window::new("Items")
             .default_size(Vec2::new(1500f32, 1000f32))
@@ -59,7 +60,8 @@ impl ItemsWindow {
                 let span = trace_span!("show items window inner");
                 let _guard = span.enter();
 
-                let mut tab_viewer = ItemTabsViewer::new(items, items_images, monsters_images);
+                let mut tab_viewer =
+                    ItemTabsViewer::new(items, items_images, monsters_images, current_sub_area);
 
                 DockArea::new(&mut self.tree)
                     .show_close_buttons(false)

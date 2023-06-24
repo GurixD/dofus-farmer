@@ -94,7 +94,7 @@ pub type ItemsRelations = HashMap<
                 (
                     usize,                                  // quantity needed
                     usize,                                  // quantity in inventory
-                    HashMap<Rc<Monster>, HashSet<SubArea>>, // monsters and their image + sub areas
+                    HashMap<Rc<Monster>, HashSet<SubArea>>, // monsters and their sub areas
                 ),
             >,
         >,
@@ -115,6 +115,7 @@ pub struct MainWindow {
     images_number: (u8, u8),
     map_min_max: MapMinMax,
     sub_areas: HashMap<SubArea, Vec<Map>>,
+    current_sub_area: Option<SubArea>,
     map_tx: Sender<(Image, u16, usize)>,
     map_rx: Receiver<(Image, u16, usize)>,
     item_rx: Receiver<(Item, usize)>,
@@ -207,6 +208,8 @@ impl MainWindow {
             maps_per_sub_area
         };
 
+        let current_sub_area = None;
+
         let maps_images = HashMap::new();
         let items = HashMap::new();
         let items_images = HashMap::new();
@@ -222,6 +225,7 @@ impl MainWindow {
             images_number,
             map_min_max,
             sub_areas,
+            current_sub_area,
             map_tx,
             map_rx,
             item_rx,
@@ -305,6 +309,7 @@ impl MainWindow {
 
         self.check_images_flags();
 
+        self.current_sub_area = None;
         if let Some(pointer_pos_on_map_zoomed) = pointer_pos_on_map_zoomed {
             if Self::MAPS_RECT.contains(pointer_pos_on_map_zoomed) {
                 let zoom = Self::ZOOMS[self.zoom_index];
@@ -344,10 +349,12 @@ impl MainWindow {
                     sub_area.1.iter().for_each(|map| {
                         self.map_rect_on_pos(ui, map.x as _, map.y as _, fullmap_position, None);
                     });
+
+                    self.current_sub_area = Some(sub_area.0.clone());
                 }
             }
         }
-        
+
         let mut sub_areas_to_draw = HashSet::new();
         self.items.iter().for_each(|(_, (_, ingredients))| {
             if let AsyncStatus::Ready(ingredients) = ingredients {
@@ -783,7 +790,12 @@ impl eframe::App for MainWindow {
             .frame(frame)
             .show(ctx, |ui| self.central_panel_ui(ui));
 
-        self.items_window
-            .show(ctx, &self.items, &self.items_images, &self.monsters_images);
+        self.items_window.show(
+            ctx,
+            &self.items,
+            &self.items_images,
+            &self.monsters_images,
+            &self.current_sub_area,
+        );
     }
 }
