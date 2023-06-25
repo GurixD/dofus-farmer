@@ -11,8 +11,8 @@ use diesel::{
     update, PgConnection,
 };
 use egui::{
-    CentralPanel, Color32, ColorImage, Context, Frame, InputState, Pos2, Rect, Rounding,
-    TextureHandle, Ui, Vec2,
+    CentralPanel, Color32, ColorImage, Context, Frame, InputState, PointerButton, Pos2, Rect,
+    Rounding, TextureHandle, Ui, Vec2,
 };
 use image::io::Reader;
 use lombok::AllArgsConstructor;
@@ -117,6 +117,7 @@ pub struct MainWindow {
     map_min_max: MapMinMax,
     sub_areas: HashMap<SubArea, Vec<Map>>,
     current_sub_area: Option<SubArea>,
+    clicked_map: Option<(f32, f32)>,
     map_tx: Sender<(Image, u16, usize)>,
     map_rx: Receiver<(Image, u16, usize)>,
     item_rx: Receiver<(Item, usize)>,
@@ -236,6 +237,7 @@ impl MainWindow {
         };
 
         let current_sub_area = None;
+        let clicked_map = None;
 
         let maps_images = HashMap::new();
         let items = BTreeMap::new();
@@ -254,6 +256,7 @@ impl MainWindow {
             map_min_max,
             sub_areas,
             current_sub_area,
+            clicked_map,
             map_tx,
             map_rx,
             item_rx,
@@ -309,7 +312,12 @@ impl MainWindow {
     fn central_panel_ui(&mut self, ui: &Ui) {
         let ctx = ui.ctx();
         let ui_contains_pointer = ui.ui_contains_pointer();
-        let pointer_pos = ui.input(|input_state| self.on_input(input_state, ui_contains_pointer));
+        let (pointer_pos, double_clicked, right_clicked) =
+            ui.input(|input_state| self.on_input(input_state, ui_contains_pointer));
+
+        if right_clicked {
+            self.clicked_map = None;
+        }
 
         let fullmap_position = self.map_position
             + self
@@ -338,7 +346,10 @@ impl MainWindow {
         self.check_images_flags();
 
         self.current_sub_area = None;
-        if let Some(pointer_pos_on_map_zoomed) = pointer_pos_on_map_zoomed {
+
+        if let Some((x_index, y_index)) = self.clicked_map {
+            self.draw_and_filter_map(ui, fullmap_position, x_index, y_index);
+        } else if let Some(pointer_pos_on_map_zoomed) = pointer_pos_on_map_zoomed {
             if Self::MAPS_RECT.contains(pointer_pos_on_map_zoomed) {
                 let zoom = Self::ZOOMS[self.zoom_index];
                 let rect_size = Vec2::new(
@@ -358,39 +369,11 @@ impl MainWindow {
                 let y_index =
                     ((pointer_pos_on_map_zoomed.y * zoom - offset.1) / rect_size.y).floor() - 6f32;
 
-                self.map_rect_on_index(
-                    ui,
-                    x_index,
-                    y_index,
-                    fullmap_position,
-                    Some(Color32::from_rgba_unmultiplied(0, 0, 139, 100)),
-                );
-
-                let sub_area = self.sub_areas.iter().find(|(_, maps)| {
-                    maps.iter().any(|map| {
-                        map.x == x_index as i16 + self.map_min_max.x_min
-                            && map.y == y_index as i16 + self.map_min_max.y_min
-                    })
-                });
-
-                if let Some(sub_area) = sub_area {
-                    sub_area.1.iter().for_each(|map| {
-                        self.map_rect_on_pos(ui, map.x as _, map.y as _, fullmap_position, None);
-                    });
-
-                    if self.items.iter().any(|(_, (_, ingredients))| {
-                        if let AsyncStatus::Ready(ingredients) = ingredients {
-                            return ingredients.iter().any(|(_, (_, monsters))| {
-                                monsters
-                                    .iter()
-                                    .any(|(_, sub_areas)| sub_areas.contains(sub_area.0))
-                            });
-                        }
-                        false
-                    }) {
-                        self.current_sub_area = Some(sub_area.0.clone());
-                    }
+                if double_clicked {
+                    self.clicked_map = Some((x_index, y_index));
                 }
+
+                self.draw_and_filter_map(ui, fullmap_position, x_index, y_index);
             }
         }
 
@@ -413,6 +396,42 @@ impl MainWindow {
                     self.map_rect_on_pos(ui, map.x as _, map.y as _, fullmap_position, None);
                 });
             });
+    }
+
+    fn draw_and_filter_map(&mut self, ui: &Ui, fullmap_position: Pos2, x_index: f32, y_index: f32) {
+        self.map_rect_on_index(
+            ui,
+            x_index,
+            y_index,
+            fullmap_position,
+            Some(Color32::from_rgba_unmultiplied(0, 0, 139, 100)),
+        );
+
+        let sub_area = self.sub_areas.iter().find(|(_, maps)| {
+            maps.iter().any(|map| {
+                map.x == x_index as i16 + self.map_min_max.x_min
+                    && map.y == y_index as i16 + self.map_min_max.y_min
+            })
+        });
+
+        if let Some(sub_area) = sub_area {
+            sub_area.1.iter().for_each(|map| {
+                self.map_rect_on_pos(ui, map.x as _, map.y as _, fullmap_position, None);
+            });
+
+            if self.items.iter().any(|(_, (_, ingredients))| {
+                if let AsyncStatus::Ready(ingredients) = ingredients {
+                    return ingredients.iter().any(|(_, (_, monsters))| {
+                        monsters
+                            .iter()
+                            .any(|(_, sub_areas)| sub_areas.contains(sub_area.0))
+                    });
+                }
+                false
+            }) {
+                self.current_sub_area = Some(sub_area.0.clone());
+            }
+        }
     }
 
     fn map_rect_on_index(
@@ -469,14 +488,12 @@ impl MainWindow {
         )
     }
 
-    fn on_input(&mut self, input_state: &InputState, ui_contains_pointer: bool) -> Option<Pos2> {
-        let span = trace_span!("read inputs");
-        let _guard = span.enter();
-
+    fn on_input(
+        &mut self,
+        input_state: &InputState,
+        ui_contains_pointer: bool,
+    ) -> (Option<Pos2>, bool, bool) {
         if ui_contains_pointer {
-            let span = trace_span!("ui_contains_pointer");
-            let _guard = span.enter();
-
             if input_state.pointer.primary_pressed() {
                 self.clicked_position = input_state.pointer.interact_pos();
             }
@@ -503,10 +520,16 @@ impl MainWindow {
             }
         }
 
-        input_state
+        let pointer_pos = input_state
             .pointer
             .interact_pos()
-            .filter(|_| ui_contains_pointer)
+            .filter(|_| ui_contains_pointer);
+
+        let double_clicked = input_state
+            .pointer
+            .button_double_clicked(PointerButton::Primary);
+        let right_clicked = input_state.pointer.secondary_clicked() && ui_contains_pointer;
+        (pointer_pos, double_clicked, right_clicked)
     }
 
     fn reset_images_flags(&mut self) {
