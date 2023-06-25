@@ -12,6 +12,7 @@ use super::item_tabs_data::ItemTabsData;
 
 pub struct ItemTabsViewer<'a> {
     items: &'a ItemsRelations,
+    ingredient_quantity: &'a HashMap<Item, usize>,
     items_images: &'a HashMap<Rc<Item>, AsyncStatus<Image>>,
     monsters_images: &'a HashMap<Rc<Monster>, AsyncStatus<Image>>,
     current_sub_area: &'a Option<SubArea>,
@@ -20,12 +21,14 @@ pub struct ItemTabsViewer<'a> {
 impl<'a> ItemTabsViewer<'a> {
     pub fn new(
         items: &'a ItemsRelations,
+        ingredient_quantity: &'a HashMap<Item, usize>,
         items_images: &'a HashMap<Rc<Item>, AsyncStatus<Image>>,
         monsters_images: &'a HashMap<Rc<Monster>, AsyncStatus<Image>>,
         current_sub_area: &'a Option<SubArea>,
     ) -> Self {
         Self {
             items,
+            ingredient_quantity,
             items_images,
             monsters_images,
             current_sub_area,
@@ -42,9 +45,13 @@ impl<'a> TabViewer for ItemTabsViewer<'a> {
             ItemTabsData::WishList(tab) => {
                 tab.show(ui, self.items, self.items_images, self.current_sub_area)
             }
-            ItemTabsData::Resources(tab) => {
-                tab.show(ui, self.items, self.items_images, self.current_sub_area)
-            }
+            ItemTabsData::Resources(tab) => tab.show(
+                ui,
+                self.items,
+                self.items_images,
+                self.ingredient_quantity,
+                self.current_sub_area,
+            ),
             ItemTabsData::Monsters(tab) => {
                 tab.show(ui, self.items, self.monsters_images, self.current_sub_area)
             }

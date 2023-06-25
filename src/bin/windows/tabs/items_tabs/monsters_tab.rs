@@ -28,7 +28,7 @@ impl MonstersTab {
 
         items.iter().for_each(|(_, (_, ingredients))| {
             if let AsyncStatus::Ready(ingredients) = ingredients {
-                ingredients.iter().for_each(|(_, (_, _, monsters))| {
+                ingredients.iter().for_each(|(_, (_, monsters))| {
                     let monsters: BTreeSet<_> = monsters
                         .iter()
                         .filter_map(|(monster, sub_areas)| {

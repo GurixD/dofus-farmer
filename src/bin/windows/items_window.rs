@@ -26,9 +26,11 @@ impl ItemsWindow {
     pub fn new(
         pool: Pool<ConnectionManager<PgConnection>>,
         item_clicked_tx: Sender<(Item, usize)>,
+        new_ingredient_tx: Sender<(Item, isize)>,
+        remove_item_tx: Sender<(Item, usize, bool)>,
     ) -> Self {
-        let wish_list_tab = WishListTab::new();
-        let resources_tab = ResourcesTab::new();
+        let wish_list_tab = WishListTab::new(remove_item_tx);
+        let resources_tab = ResourcesTab::new(new_ingredient_tx);
         let search_item_tab = SearchItemTab::new(pool, item_clicked_tx);
         let monsters_tab = MonstersTab::new();
 
@@ -49,6 +51,7 @@ impl ItemsWindow {
         &mut self,
         ctx: &Context,
         items: &ItemsRelations,
+        ingredient_quantity: &HashMap<Item, usize>,
         items_images: &HashMap<Rc<Item>, AsyncStatus<Image>>,
         monsters_images: &HashMap<Rc<Monster>, AsyncStatus<Image>>,
         current_sub_area: &Option<SubArea>,
@@ -60,8 +63,13 @@ impl ItemsWindow {
                 let span = trace_span!("show items window inner");
                 let _guard = span.enter();
 
-                let mut tab_viewer =
-                    ItemTabsViewer::new(items, items_images, monsters_images, current_sub_area);
+                let mut tab_viewer = ItemTabsViewer::new(
+                    items,
+                    ingredient_quantity,
+                    items_images,
+                    monsters_images,
+                    current_sub_area,
+                );
 
                 DockArea::new(&mut self.tree)
                     .show_close_buttons(false)

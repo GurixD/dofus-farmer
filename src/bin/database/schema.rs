@@ -63,12 +63,28 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    user_ingredients (item_id) {
+        item_id -> Int4,
+        quantity -> Int2,
+    }
+}
+
+diesel::table! {
+    user_items (item_id) {
+        item_id -> Int4,
+        quantity -> Int2,
+    }
+}
+
 diesel::joinable!(drops -> items (item_id));
 diesel::joinable!(drops -> monsters (monster_id));
 diesel::joinable!(maps -> sub_areas (sub_area_id));
 diesel::joinable!(monsters_sub_areas -> monsters (monster_id));
 diesel::joinable!(monsters_sub_areas -> sub_areas (sub_area_id));
 diesel::joinable!(sub_areas -> areas (area_id));
+diesel::joinable!(user_ingredients -> items (item_id));
+diesel::joinable!(user_items -> items (item_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     areas,
@@ -79,4 +95,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     monsters_sub_areas,
     recipes,
     sub_areas,
+    user_ingredients,
+    user_items,
 );

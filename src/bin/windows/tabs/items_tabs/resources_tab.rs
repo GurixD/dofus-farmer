@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     rc::Rc,
+    sync::mpsc::Sender,
 };
 
 use crate::{
@@ -8,13 +9,15 @@ use crate::{
     windows::main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
 };
 
-use egui::{ImageButton, Layout, Ui, Vec2};
+use egui::{ImageButton, Layout, PointerButton, Ui, Vec2};
 
-pub struct ResourcesTab {}
+pub struct ResourcesTab {
+    new_ingredient_tx: Sender<(Item, isize)>,
+}
 
 impl ResourcesTab {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(new_ingredient_tx: Sender<(Item, isize)>) -> Self {
+        Self { new_ingredient_tx }
     }
 
     pub fn show(
@@ -22,6 +25,7 @@ impl ResourcesTab {
         ui: &mut Ui,
         items: &ItemsRelations,
         items_images: &HashMap<Rc<Item>, AsyncStatus<Image>>,
+        ingredient_quantity: &HashMap<Item, usize>,
         current_sub_area: &Option<SubArea>,
     ) {
         let mut ingredients_total = BTreeMap::new();
@@ -30,7 +34,7 @@ impl ResourcesTab {
             if let AsyncStatus::Ready(ingredients) = ingredients {
                 ingredients
                     .iter()
-                    .for_each(|(ingredient, (needed, in_inventory, monsters))| {
+                    .for_each(|(ingredient, (needed, monsters))| {
                         let show_this = if let Some(sub_area) = current_sub_area {
                             monsters
                                 .iter()
@@ -41,11 +45,15 @@ impl ResourcesTab {
                         if show_this {
                             ingredients_total
                                 .entry(ingredient)
-                                .and_modify(|(needed_total, in_inventory_total)| {
+                                .and_modify(|(needed_total, _)| {
                                     *needed_total += needed * quantity;
-                                    *in_inventory_total += in_inventory;
                                 })
-                                .or_insert_with(|| (*needed * quantity, *in_inventory));
+                                .or_insert_with(|| {
+                                    (
+                                        *needed * quantity,
+                                        ingredient_quantity.get(&ingredient).unwrap_or(&0),
+                                    )
+                                });
                         }
                     });
             }
@@ -66,8 +74,17 @@ impl ResourcesTab {
                                         MainWindow::ITEM_IMAGE_SIZE,
                                     );
 
-                                    let response = ui.add(button);
-                                    response.on_hover_text(&item.name);
+                                    let response = ui.add(button).on_hover_text(&item.name);
+                                    if response.clicked_by(PointerButton::Primary) {
+                                        self.new_ingredient_tx
+                                            .send((item.as_ref().clone(), 1))
+                                            .unwrap();
+                                    } else if response.clicked_by(PointerButton::Secondary) {
+                                        self.new_ingredient_tx
+                                            .send((item.as_ref().clone(), -1))
+                                            .unwrap();
+                                    }
+
                                     ui.label(format!("{in_inventory}/{needed}"));
                                 });
                             },

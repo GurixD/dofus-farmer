@@ -1,12 +1,14 @@
 use std::{
-    collections::{HashMap, HashSet},
+    cmp,
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
     sync::mpsc::{self, Receiver, Sender},
 };
 
 use diesel::{
+    delete, insert_into,
     r2d2::{ConnectionManager, Pool},
-    PgConnection,
+    update, PgConnection,
 };
 use egui::{
     CentralPanel, Color32, ColorImage, Context, Frame, InputState, Pos2, Rect, Rounding,
@@ -19,7 +21,7 @@ use tracing::{trace_span, warn};
 use crate::database::{
     models::{
         drop::Drop, item::Item, map::Map, monster::Monster, monster_sub_area::MonsterSubArea,
-        recipe::Recipe, sub_area::SubArea,
+        recipe::Recipe, sub_area::SubArea, user_ingredient::UserIngredient, user_item::UserItem,
     },
     schema::maps,
 };
@@ -84,7 +86,7 @@ impl Image {
     }
 }
 
-pub type ItemsRelations = HashMap<
+pub type ItemsRelations = BTreeMap<
     Rc<Item>, // item to craft
     (
         usize, // quantity
@@ -93,7 +95,6 @@ pub type ItemsRelations = HashMap<
                 Rc<Item>, // one of the resources needed to make it
                 (
                     usize,                                  // quantity needed
-                    usize,                                  // quantity in inventory
                     HashMap<Rc<Monster>, HashSet<SubArea>>, // monsters and their sub areas
                 ),
             >,
@@ -119,6 +120,7 @@ pub struct MainWindow {
     map_tx: Sender<(Image, u16, usize)>,
     map_rx: Receiver<(Image, u16, usize)>,
     item_rx: Receiver<(Item, usize)>,
+    remove_item_rx: Receiver<(Item, usize, bool)>,
     item_ingredients_tx: Sender<Ingredients>,
     item_ingredients_rx: Receiver<Ingredients>,
     item_image_tx: Sender<(Item, Image)>,
@@ -126,8 +128,10 @@ pub struct MainWindow {
     items_images: HashMap<Rc<Item>, AsyncStatus<Image>>,
     monster_image_tx: Sender<(Monster, Image)>,
     monster_image_rx: Receiver<(Monster, Image)>,
+    new_ingredient_rx: Receiver<(Item, isize)>,
     monsters_images: HashMap<Rc<Monster>, AsyncStatus<Image>>,
     items: ItemsRelations,
+    ingredients_quantity: HashMap<Item, usize>,
     items_window: ItemsWindow,
     pool: Pool<ConnectionManager<PgConnection>>,
 }
@@ -153,9 +157,11 @@ impl MainWindow {
     ) -> Self {
         let (map_tx, map_rx) = mpsc::channel();
         let (item_tx, item_rx) = mpsc::channel();
+        let (remove_item_tx, remove_item_rx) = mpsc::channel();
         let (item_ingredients_tx, item_ingredients_rx) = mpsc::channel();
         let (item_image_tx, item_image_rx) = mpsc::channel();
         let (monster_image_tx, monster_image_rx) = mpsc::channel();
+        let (new_ingredient_tx, new_ingredient_rx) = mpsc::channel();
 
         let mut connection = pool.get().unwrap();
 
@@ -207,15 +213,37 @@ impl MainWindow {
 
             maps_per_sub_area
         };
+        let ingredients_quantity = {
+            use crate::database::schema::{items, user_ingredients, user_items};
+            use diesel::prelude::*;
+
+            let user_items: Vec<(UserItem, Item)> = user_items::table
+                .inner_join(items::table)
+                .load(&mut connection)
+                .unwrap();
+
+            user_items.into_iter().for_each(|(user_item, item)| {
+                item_tx.send((item, user_item.quantity as _)).unwrap()
+            });
+
+            user_ingredients::table
+                .inner_join(items::table)
+                .load::<(UserIngredient, Item)>(&mut connection)
+                .unwrap()
+                .into_iter()
+                .map(|(user_ingredient, item)| (item, user_ingredient.quantity as usize))
+                .collect()
+        };
 
         let current_sub_area = None;
 
         let maps_images = HashMap::new();
-        let items = HashMap::new();
+        let items = BTreeMap::new();
         let items_images = HashMap::new();
         let monsters_images = HashMap::new();
 
-        let items_window = ItemsWindow::new(pool.clone(), item_tx);
+        let items_window =
+            ItemsWindow::new(pool.clone(), item_tx, new_ingredient_tx, remove_item_tx);
 
         Self {
             zoom_index,
@@ -229,6 +257,7 @@ impl MainWindow {
             map_tx,
             map_rx,
             item_rx,
+            remove_item_rx,
             item_ingredients_tx,
             item_ingredients_rx,
             item_image_tx,
@@ -236,17 +265,16 @@ impl MainWindow {
             items_images,
             monster_image_tx,
             monster_image_rx,
+            new_ingredient_rx,
             monsters_images,
             items,
+            ingredients_quantity,
             items_window,
             pool,
         }
     }
 
     fn draw_map_body_loop(&mut self, x: i32, y: i32, pos: Pos2, ui: &Ui) {
-        let span = trace_span!("draw_map_body_loop");
-        let _guard = span.enter();
-
         let new_x = x - pos.x as i32;
         let new_y = y - pos.y as i32;
 
@@ -352,7 +380,7 @@ impl MainWindow {
 
                     if self.items.iter().any(|(_, (_, ingredients))| {
                         if let AsyncStatus::Ready(ingredients) = ingredients {
-                            return ingredients.iter().any(|(_, (_, _, monsters))| {
+                            return ingredients.iter().any(|(_, (_, monsters))| {
                                 monsters
                                     .iter()
                                     .any(|(_, sub_areas)| sub_areas.contains(sub_area.0))
@@ -369,7 +397,7 @@ impl MainWindow {
         let mut sub_areas_to_draw = HashSet::new();
         self.items.iter().for_each(|(_, (_, ingredients))| {
             if let AsyncStatus::Ready(ingredients) = ingredients {
-                ingredients.iter().for_each(|(_, (_, _, monsters))| {
+                ingredients.iter().for_each(|(_, (_, monsters))| {
                     monsters.iter().for_each(|(_, sub_areas)| {
                         sub_areas_to_draw.extend(sub_areas);
                     });
@@ -556,8 +584,8 @@ impl MainWindow {
 
     fn check_for_new_items(&mut self, ctx: &Context) {
         self.item_rx.try_iter().for_each(|(item, quantity)| {
-            if let Some(item_value) = self.items.get_mut(&item) {
-                item_value.0 += quantity;
+            if let Some((item_value, _)) = self.items.get_mut(&item) {
+                *item_value += quantity;
             } else {
                 let item_rc = Rc::new(item.clone());
 
@@ -572,15 +600,127 @@ impl MainWindow {
                         AsyncStatus::Loading
                     });
 
-                self.items.insert(item_rc, (quantity, AsyncStatus::Loading));
+                self.items
+                    .insert(item_rc, (quantity as _, AsyncStatus::Loading));
                 Self::get_all_related(
                     self.item_ingredients_tx.clone(),
                     self.pool.clone(),
-                    item,
-                    quantity,
+                    item.clone(),
+                    quantity as _,
                 );
             }
+
+            use crate::database::schema::user_items;
+            use diesel::prelude::*;
+
+            let pool = self.pool.clone();
+
+            tokio::spawn(async move {
+                let mut connection = pool.get().unwrap();
+                let user_item = UserItem::new(item.id, quantity as i16);
+
+                insert_into(user_items::table)
+                    .values(&user_item)
+                    .on_conflict(user_items::item_id)
+                    .do_update()
+                    .set(&user_item)
+                    .execute(&mut connection)
+                    .unwrap();
+            });
         });
+    }
+
+    fn check_for_removed_item(&mut self) {
+        self.remove_item_rx
+            .try_iter()
+            .for_each(|(item, quantity, crafted)| {
+                let (value, ingredients) = self.items.get_mut(&item).unwrap();
+
+                // Cant remove more than what we have
+                let quantity = cmp::min(quantity, *value);
+
+                if crafted {
+                    if let AsyncStatus::Ready(ingredients) = ingredients {
+                        ingredients.iter().for_each(|(item, (needed, _))| {
+                            if let Some(in_inventory) = self.ingredients_quantity.get_mut(&item) {
+                                let to_remove = cmp::min(*in_inventory, needed * quantity);
+                                *in_inventory -= to_remove;
+
+                                let pool = self.pool.clone();
+                                let item_id = item.id;
+                                if *in_inventory == 0 {
+                                    self.ingredients_quantity.remove(&item);
+
+                                    tokio::spawn(async move {
+                                        use crate::database::schema::user_ingredients;
+                                        use diesel::prelude::*;
+
+                                        let mut connection = pool.get().unwrap();
+
+                                        delete(user_ingredients::table)
+                                            .filter(user_ingredients::item_id.eq(item_id))
+                                            .execute(&mut connection)
+                                            .unwrap();
+                                    });
+                                } else {
+                                    let user_ingredient =
+                                        UserIngredient::new(item_id, *in_inventory as i16);
+                                    tokio::spawn(async move {
+                                        use crate::database::schema::user_ingredients;
+                                        use diesel::prelude::*;
+
+                                        let mut connection = pool.get().unwrap();
+
+                                        update(user_ingredients::table)
+                                            .filter(
+                                                user_ingredients::item_id
+                                                    .eq(user_ingredient.item_id),
+                                            )
+                                            .set(&user_ingredient)
+                                            .execute(&mut connection)
+                                            .unwrap();
+                                    });
+                                }
+                            }
+                        });
+                    }
+                }
+
+                let pool = self.pool.clone();
+                let item_id = item.id;
+
+                if *value == quantity {
+                    self.items.remove(&item);
+
+                    tokio::spawn(async move {
+                        use crate::database::schema::user_items;
+                        use diesel::prelude::*;
+
+                        let mut connection = pool.get().unwrap();
+
+                        delete(user_items::table)
+                            .filter(user_items::item_id.eq(item_id))
+                            .execute(&mut connection)
+                            .unwrap();
+                    });
+                } else {
+                    *value -= quantity;
+
+                    let user_item = UserItem::new(item_id, *value as i16);
+                    tokio::spawn(async move {
+                        use crate::database::schema::user_items;
+                        use diesel::prelude::*;
+
+                        let mut connection = pool.get().unwrap();
+
+                        update(user_items::table)
+                            .filter(user_items::item_id.eq(user_item.item_id))
+                            .set(&user_item)
+                            .execute(&mut connection)
+                            .unwrap();
+                    });
+                }
+            });
     }
 
     fn check_for_new_item_ingredients(&mut self, ctx: &Context) {
@@ -629,13 +769,58 @@ impl MainWindow {
                                     (monster, sub_areas)
                                 })
                                 .collect();
-                            (ingredient_rc, (quantity, 0usize, monsters_rc))
+                            (ingredient_rc, (quantity, monsters_rc))
                         })
                         .collect();
                     *loading_ingredients = AsyncStatus::Ready(ingredients_rc);
                 } else {
                     warn!("new item ingredients empty item");
                 }
+            });
+    }
+
+    fn check_for_new_ingredient_in_inventory(&mut self) {
+        self.new_ingredient_rx
+            .try_iter()
+            .for_each(|(item, quantity)| {
+                let user_ingredient = UserIngredient::new(item.id, 0);
+
+                let quantity = self
+                    .ingredients_quantity
+                    .entry(item)
+                    .and_modify(|old_quantity| {
+                        *old_quantity = cmp::max(*old_quantity as isize + quantity, 0) as _;
+                    })
+                    .or_insert(cmp::max(quantity, 0) as _)
+                    .clone() as i16;
+
+                let user_ingredient = UserIngredient {
+                    quantity,
+                    ..user_ingredient
+                };
+
+                let pool = self.pool.clone();
+
+                use crate::database::schema::user_ingredients;
+                use diesel::prelude::*;
+
+                tokio::spawn(async move {
+                    let mut connection = pool.get().unwrap();
+                    if user_ingredient.quantity == 0 {
+                        delete(user_ingredients::table)
+                            .filter(user_ingredients::item_id.eq(user_ingredient.item_id))
+                            .execute(&mut connection)
+                            .unwrap();
+                    } else {
+                        insert_into(user_ingredients::table)
+                            .values(&user_ingredient)
+                            .on_conflict(user_ingredients::item_id)
+                            .do_update()
+                            .set(&user_ingredient)
+                            .execute(&mut connection)
+                            .unwrap();
+                    }
+                });
             });
     }
 
@@ -791,7 +976,9 @@ impl eframe::App for MainWindow {
         let _guard = span.enter();
 
         self.check_for_new_items(ctx);
+        self.check_for_removed_item();
         self.check_for_new_item_ingredients(ctx);
+        self.check_for_new_ingredient_in_inventory();
         self.check_for_new_items_images();
         self.check_for_new_monsters_images();
         self.check_for_new_map_images();
@@ -804,6 +991,7 @@ impl eframe::App for MainWindow {
         self.items_window.show(
             ctx,
             &self.items,
+            &self.ingredients_quantity,
             &self.items_images,
             &self.monsters_images,
             &self.current_sub_area,

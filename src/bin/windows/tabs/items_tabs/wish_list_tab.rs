@@ -1,17 +1,19 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, rc::Rc, sync::mpsc::Sender};
 
-use egui::{ImageButton, Layout, Ui, Vec2};
+use egui::{ImageButton, Layout, PointerButton, Ui, Vec2};
 
 use crate::{
     database::models::{item::Item, sub_area::SubArea},
     windows::main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
 };
 
-pub struct WishListTab {}
+pub struct WishListTab {
+    remove_item_tx: Sender<(Item, usize, bool)>,
+}
 
 impl WishListTab {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(remove_item_tx: Sender<(Item, usize, bool)>) -> Self {
+        Self { remove_item_tx }
     }
 
     pub fn show(
@@ -28,7 +30,7 @@ impl WishListTab {
                         .clone()
                         .map(|sub_area| {
                             if let AsyncStatus::Ready(ingredients) = ingredients {
-                                return ingredients.iter().any(|(_, (_, _, monsters))| {
+                                return ingredients.iter().any(|(_, (_, monsters))| {
                                     monsters
                                         .iter()
                                         .any(|(_, sub_areas)| sub_areas.contains(&sub_area))
@@ -49,8 +51,18 @@ impl WishListTab {
                                         image.handle.id(),
                                         MainWindow::ITEM_IMAGE_SIZE,
                                     );
-                                    let response = ui.add(button);
-                                    response.on_hover_text(&item.name);
+                                    let response = ui.add(button).on_hover_text(&item.name);
+
+                                    if response.clicked_by(PointerButton::Primary) {
+                                        self.remove_item_tx
+                                            .send((item.as_ref().clone(), 1, true))
+                                            .unwrap();
+                                    } else if response.clicked_by(PointerButton::Secondary) {
+                                        self.remove_item_tx
+                                            .send((item.as_ref().clone(), 1, false))
+                                            .unwrap();
+                                    }
+
                                     ui.label(quantity.to_string());
                                 });
                             },

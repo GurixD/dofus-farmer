@@ -6,3 +6,5 @@ pub mod monster;
 pub mod monster_sub_area;
 pub mod recipe;
 pub mod sub_area;
+pub mod user_ingredient;
+pub mod user_item;
