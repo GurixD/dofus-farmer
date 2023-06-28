@@ -607,8 +607,9 @@ impl MainWindow {
 
     fn check_for_new_items(&mut self, ctx: &Context) {
         self.item_rx.try_iter().for_each(|(item, quantity)| {
-            if let Some((item_value, _)) = self.items.get_mut(&item) {
+            let new_quantity = if let Some((item_value, _)) = self.items.get_mut(&item) {
                 *item_value += quantity;
+                *item_value
             } else {
                 let item_rc = Rc::new(item.clone());
 
@@ -631,7 +632,9 @@ impl MainWindow {
                     item.clone(),
                     quantity as _,
                 );
-            }
+
+                quantity
+            };
 
             use crate::database::schema::user_items;
             use diesel::prelude::*;
@@ -640,7 +643,7 @@ impl MainWindow {
 
             tokio::spawn(async move {
                 let mut connection = pool.get().unwrap();
-                let user_item = UserItem::new(item.id, quantity as i16);
+                let user_item = UserItem::new(item.id, new_quantity as i16);
 
                 insert_into(user_items::table)
                     .values(&user_item)
