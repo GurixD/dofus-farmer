@@ -665,14 +665,14 @@ impl MainWindow {
                 if crafted {
                     if let AsyncStatus::Ready(ingredients) = ingredients {
                         ingredients.iter().for_each(|(item, (needed, _))| {
-                            if let Some(in_inventory) = self.ingredients_quantity.get_mut(&item) {
+                            if let Some(in_inventory) = self.ingredients_quantity.get_mut(item) {
                                 let to_remove = cmp::min(*in_inventory, needed * quantity);
                                 *in_inventory -= to_remove;
 
                                 let pool = self.pool.clone();
                                 let item_id = item.id;
                                 if *in_inventory == 0 {
-                                    self.ingredients_quantity.remove(&item);
+                                    self.ingredients_quantity.remove(item);
 
                                     tokio::spawn(async move {
                                         use crate::database::schema::user_ingredients;
@@ -808,14 +808,13 @@ impl MainWindow {
             .for_each(|(item, quantity)| {
                 let user_ingredient = UserIngredient::new(item.id, 0);
 
-                let quantity = self
+                let quantity = *self
                     .ingredients_quantity
                     .entry(item)
                     .and_modify(|old_quantity| {
                         *old_quantity = cmp::max(*old_quantity as isize + quantity, 0) as _;
                     })
-                    .or_insert(cmp::max(quantity, 0) as _)
-                    .clone() as i16;
+                    .or_insert(cmp::max(quantity, 0) as _) as i16;
 
                 let user_ingredient = UserIngredient {
                     quantity,

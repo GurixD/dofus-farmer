@@ -51,7 +51,7 @@ impl ResourcesTab {
                                 .or_insert_with(|| {
                                     (
                                         *needed * quantity,
-                                        ingredient_quantity.get(&ingredient).unwrap_or(&0),
+                                        ingredient_quantity.get(ingredient).unwrap_or(&0),
                                     )
                                 });
                         }
