@@ -13,14 +13,24 @@ use crate::{
 };
 
 use egui::{ImageButton, Layout, PointerButton, Ui, Vec2};
+use egui_modal::Modal;
 
 pub struct ResourcesTab {
     new_ingredient_tx: Sender<(Item, isize)>,
+    modal_clicked_item: Option<Item>,
+    modal_quantity: String,
 }
 
 impl ResourcesTab {
     pub fn new(new_ingredient_tx: Sender<(Item, isize)>) -> Self {
-        Self { new_ingredient_tx }
+        let modal_clicked_item = Default::default();
+        let modal_quantity = Default::default();
+
+        Self {
+            new_ingredient_tx,
+            modal_clicked_item,
+            modal_quantity,
+        }
     }
 
     pub fn show(
@@ -31,6 +41,7 @@ impl ResourcesTab {
         ingredient_quantity: &HashMap<Item, usize>,
         current_sub_area: &Option<SubArea>,
     ) {
+        // Same as ingredient_quantity but with quantity needed
         let mut ingredients_total = BTreeMap::new();
 
         items.iter().for_each(|(_, (quantity, ingredients))| {
@@ -62,10 +73,30 @@ impl ResourcesTab {
             }
         });
 
+        let quantity_modal = Modal::new(ui.ctx(), "resources modal");
+
+        quantity_modal.show(|ui| {
+            ui.text_edit_singleline(&mut self.modal_quantity);
+            ui.horizontal(|ui| {
+                if ui.button("Close").clicked() {
+                    self.modal_clicked_item = None;
+                    quantity_modal.close();
+                } else if ui.button("Add").clicked() {
+                    if let Ok(quantity) = self.modal_quantity.parse::<isize>() {
+                        let item = self.modal_clicked_item.take();
+                        self.new_ingredient_tx
+                            .send((item.unwrap(), quantity))
+                            .unwrap();
+                        quantity_modal.close();
+                    }
+                }
+            });
+        });
+
         ui.horizontal_wrapped(|ui| {
             ingredients_total
                 .iter()
-                .for_each(|(&item, (needed, in_inventory))| {
+                .for_each(|(&item, (needed, &in_inventory))| {
                     if let Some(AsyncStatus::Ready(image)) = items_images.get(item) {
                         ui.allocate_ui_with_layout(
                             Vec2::new(100f32, 150f32),
@@ -82,8 +113,15 @@ impl ResourcesTab {
                                             .send((item.as_ref().clone(), 1))
                                             .unwrap();
                                     } else if response.clicked_by(PointerButton::Secondary) {
+                                        self.modal_clicked_item = Some(item.as_ref().clone());
+                                        self.modal_quantity = Default::default();
+                                        quantity_modal.open();
+                                    } else if response.clicked_by(PointerButton::Middle) {
                                         self.new_ingredient_tx
-                                            .send((item.as_ref().clone(), -1))
+                                            .send((
+                                                item.as_ref().clone(),
+                                                *needed as isize - in_inventory as isize,
+                                            ))
                                             .unwrap();
                                     }
 

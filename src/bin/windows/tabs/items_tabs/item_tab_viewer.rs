@@ -52,9 +52,13 @@ impl<'a> TabViewer for ItemTabsViewer<'a> {
                 self.ingredient_quantity,
                 self.current_sub_area,
             ),
-            ItemTabsData::Monsters(tab) => {
-                tab.show(ui, self.items, self.monsters_images, self.current_sub_area)
-            }
+            ItemTabsData::Monsters(tab) => tab.show(
+                ui,
+                self.items,
+                self.monsters_images,
+                self.ingredient_quantity,
+                self.current_sub_area,
+            ),
         }
     }
 

@@ -23,6 +23,8 @@ use crate::{
 
 pub struct SearchItemTab {
     search_bar_text: String,
+    modal_quantity: String,
+    modal_clicked_item: Option<Item>,
     items: Vec<(Item, AsyncStatus<Image>)>,
     pool: Pool<ConnectionManager<PgConnection>>,
     items_tx: Sender<(String, Vec<Item>)>,
@@ -41,6 +43,8 @@ impl SearchItemTab {
         item_clicked_tx: Sender<(Item, usize)>,
     ) -> Self {
         let search_bar_text = Default::default();
+        let modal_quantity = Default::default();
+        let modal_clicked_item = None;
         let items = Default::default();
         let (items_tx, items_rx) = sync::mpsc::channel();
         let (item_image_tx, item_image_rx) = sync::mpsc::channel();
@@ -48,6 +52,8 @@ impl SearchItemTab {
 
         Self {
             search_bar_text,
+            modal_quantity,
+            modal_clicked_item,
             items,
             pool,
             items_tx,
@@ -79,14 +85,24 @@ impl SearchItemTab {
             self.items[index].1 = AsyncStatus::Ready(image);
         });
 
-        let quantity_modal = Modal::new(ui.ctx(), "test modal");
+        let quantity_modal = Modal::new(ui.ctx(), "search modal");
 
-        // quantity_modal.show_dialog();
         quantity_modal.show(|ui| {
-            ui.label("Hello world!");
-            if ui.button("Close").clicked() {
-                quantity_modal.close();
-            }
+            ui.text_edit_singleline(&mut self.modal_quantity);
+            ui.horizontal(|ui| {
+                if ui.button("Close").clicked() {
+                    self.modal_clicked_item = None;
+                    quantity_modal.close();
+                } else if ui.button("Add").clicked() {
+                    if let Ok(quantity) = self.modal_quantity.parse::<usize>() {
+                        let item = self.modal_clicked_item.take();
+                        self.item_clicked_tx
+                            .send((item.unwrap(), quantity))
+                            .unwrap();
+                        quantity_modal.close();
+                    }
+                }
+            });
         });
 
         ui.horizontal_top(|ui| {
@@ -115,8 +131,12 @@ impl SearchItemTab {
                     let response = ui.add(button);
                     let response = response.on_hover_text(&item.0.name);
 
-                    if response.clicked_by(egui::PointerButton::Primary) {
+                    if response.clicked() {
                         self.item_clicked_tx.send((item.0.clone(), 1)).unwrap();
+                    } else if response.secondary_clicked() {
+                        self.modal_clicked_item = Some(item.0.clone());
+                        self.modal_quantity = Default::default();
+                        quantity_modal.open();
                     }
                 }
             });

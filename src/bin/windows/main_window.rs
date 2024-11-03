@@ -348,7 +348,7 @@ impl MainWindow {
         self.current_sub_area = None;
 
         if let Some((x_index, y_index)) = self.clicked_map {
-            self.draw_and_filter_map(ui, fullmap_position, x_index, y_index);
+            self.draw_map_and_filter_with_sub_area(ui, fullmap_position, x_index, y_index);
         } else if let Some(pointer_pos_on_map_zoomed) = pointer_pos_on_map_zoomed {
             if Self::MAPS_RECT.contains(pointer_pos_on_map_zoomed) {
                 let zoom = Self::ZOOMS[self.zoom_index];
@@ -373,17 +373,41 @@ impl MainWindow {
                     self.clicked_map = Some((x_index, y_index));
                 }
 
-                self.draw_and_filter_map(ui, fullmap_position, x_index, y_index);
+                self.draw_map_and_filter_with_sub_area(ui, fullmap_position, x_index, y_index);
             }
         }
+
+        let mut still_needed_ingredients_total = HashMap::new();
+
+        self.items.iter().for_each(|(_, (quantity, ingredients))| {
+            if let AsyncStatus::Ready(ingredients) = ingredients {
+                ingredients.iter().for_each(|(ingredient, (needed, _))| {
+                    still_needed_ingredients_total
+                        .entry(ingredient)
+                        .and_modify(|(needed_total, _)| {
+                            *needed_total += needed * quantity;
+                        })
+                        .or_insert_with(|| {
+                            (
+                                *needed * quantity,
+                                *self.ingredients_quantity.get(ingredient).unwrap_or(&0),
+                            )
+                        });
+                });
+            }
+        });
+
+        still_needed_ingredients_total.retain(|_, (needed, in_inventory)| in_inventory < needed);
 
         let mut sub_areas_to_draw = HashSet::new();
         self.items.iter().for_each(|(_, (_, ingredients))| {
             if let AsyncStatus::Ready(ingredients) = ingredients {
-                ingredients.iter().for_each(|(_, (_, monsters))| {
-                    monsters.iter().for_each(|(_, sub_areas)| {
-                        sub_areas_to_draw.extend(sub_areas);
-                    });
+                ingredients.iter().for_each(|(ingredient, (_, monsters))| {
+                    if still_needed_ingredients_total.contains_key(ingredient) {
+                        monsters.iter().for_each(|(_, sub_areas)| {
+                            sub_areas_to_draw.extend(sub_areas);
+                        });
+                    }
                 });
             }
         });
@@ -398,7 +422,13 @@ impl MainWindow {
             });
     }
 
-    fn draw_and_filter_map(&mut self, ui: &Ui, fullmap_position: Pos2, x_index: f32, y_index: f32) {
+    fn draw_map_and_filter_with_sub_area(
+        &mut self,
+        ui: &Ui,
+        fullmap_position: Pos2,
+        x_index: f32,
+        y_index: f32,
+    ) {
         self.map_rect_on_index(
             ui,
             x_index,
@@ -908,7 +938,7 @@ impl MainWindow {
                         .or_insert(quantity);
                 } else {
                     items_to_make.extend(result.into_iter().map(
-                        |(_, recipe, items_ingredient)| (items_ingredient, recipe.quantity as _),
+                        |(_, recipe, items_ingredient)| (items_ingredient, (recipe.quantity * quantity) as _),
                     ));
                 }
             }
@@ -934,7 +964,7 @@ impl MainWindow {
                             .load(&mut connection)
                             .unwrap();
 
-                    result_hash_map.insert(ingredient.clone(), (*quantity, Default::default()));
+                    result_hash_map.insert(ingredient.clone(), ((*quantity).try_into().unwrap(), Default::default()));
                     let mut sub_areas_for_monsters: HashMap<Monster, HashSet<SubArea>> =
                         HashMap::new();
 
