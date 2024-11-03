@@ -39,12 +39,11 @@ fn start() -> eframe::Result<()> {
     event!(Level::TRACE, "establishing  pooled connection");
     let pool = establish_pooled_connection();
 
+    let options = NativeOptions::default();
+
     eframe::run_native(
         "Dofus farmer",
-        NativeOptions {
-            maximized: true,
-            ..Default::default()
-        },
+        options,
         Box::new(|creation_context| {
             let style = Style {
                 visuals: Visuals::dark(),
@@ -53,7 +52,7 @@ fn start() -> eframe::Result<()> {
             };
 
             creation_context.egui_ctx.set_style(style);
-            Box::new(MainWindow::new(creation_context, pool))
+            Ok(Box::new(MainWindow::new(creation_context, pool)))
         }),
     )
 }

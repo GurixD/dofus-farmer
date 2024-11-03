@@ -15,7 +15,10 @@ use tracing::trace_span;
 
 use crate::{
     database::models::item::Item,
-    windows::main_window::{AsyncStatus, Image, MainWindow},
+    windows::{
+        items_window::ItemsWindow,
+        main_window::{AsyncStatus, Image},
+    },
 };
 
 pub struct SearchItemTab {
@@ -106,7 +109,9 @@ impl SearchItemTab {
         ui.horizontal_wrapped(|ui| {
             self.items.iter().for_each(|item| {
                 if let AsyncStatus::Ready(ref image) = item.1 {
-                    let button = ImageButton::new(image.handle.id(), MainWindow::ITEM_IMAGE_SIZE);
+                    let button = ImageButton::new(egui::Image::from_texture(
+                        ItemsWindow::get_sized_texture(image),
+                    ));
                     let response = ui.add(button);
                     let response = response.on_hover_text(&item.0.name);
 

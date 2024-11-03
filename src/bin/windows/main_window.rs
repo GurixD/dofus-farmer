@@ -14,7 +14,7 @@ use egui::{
     CentralPanel, Color32, ColorImage, Context, Frame, InputState, PointerButton, Pos2, Rect,
     Rounding, TextureHandle, Ui, Vec2,
 };
-use image::io::Reader;
+use image::ImageReader;
 use lombok::AllArgsConstructor;
 use tracing::{trace_span, warn};
 
@@ -78,7 +78,7 @@ impl Image {
         let _guard = span.enter();
 
         // println!("{path}");
-        let image = Reader::open(path).unwrap().decode().unwrap();
+        let image = ImageReader::open(path).unwrap().decode().unwrap();
         let size = [image.width() as _, image.height() as _];
         let image_buffer = image.to_rgba8();
         let pixels = image_buffer.as_flat_samples();
@@ -466,7 +466,7 @@ impl MainWindow {
         let rect = Rect::from_two_pos(map_pos, map_pos + rect_size);
         ui.painter().rect_filled(
             rect,
-            Rounding::none(),
+            Rounding::ZERO,
             color.unwrap_or(Color32::from_rgba_unmultiplied(60, 180, 255, 50)),
         );
     }
@@ -505,7 +505,7 @@ impl MainWindow {
                 self.map_position = Pos2::ZERO;
             }
 
-            let scroll_delta = input_state.scroll_delta.y;
+            let scroll_delta = input_state.smooth_scroll_delta.y;
             if scroll_delta > 0f32 {
                 self.zoom_out(input_state.pointer.interact_pos().unwrap());
             } else if scroll_delta < 0f32 {

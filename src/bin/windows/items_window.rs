@@ -4,14 +4,14 @@ use diesel::{
     r2d2::{ConnectionManager, Pool},
     PgConnection,
 };
-use egui::{Context, Vec2, Window};
-use egui_dock::{DockArea, NodeIndex, Style, Tree};
+use egui::{load::SizedTexture, Context, Vec2, Window};
+use egui_dock::{DockArea, DockState, NodeIndex, Style};
 use tracing::trace_span;
 
 use crate::database::models::{item::Item, monster::Monster, sub_area::SubArea};
 
 use super::{
-    main_window::{AsyncStatus, Image, ItemsRelations},
+    main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
     tabs::items_tabs::{
         item_tab_viewer::ItemTabsViewer, item_tabs_data::ItemTabsData, monsters_tab::MonstersTab,
         resources_tab::ResourcesTab, search_item_tabs::SearchItemTab, wish_list_tab::WishListTab,
@@ -19,7 +19,7 @@ use super::{
 };
 
 pub struct ItemsWindow {
-    tree: Tree<ItemTabsData>,
+    dock_state: DockState<ItemTabsData>,
 }
 
 impl ItemsWindow {
@@ -34,17 +34,18 @@ impl ItemsWindow {
         let search_item_tab = SearchItemTab::new(pool, item_clicked_tx);
         let monsters_tab = MonstersTab::new();
 
-        let mut tree = Tree::new(vec![ItemTabsData::SearchItem(search_item_tab)]);
-        let tabs = tree.split_right(
+        let mut dock_state = DockState::new(vec![ItemTabsData::SearchItem(search_item_tab)]);
+        let surface = dock_state.main_surface_mut();
+        let tabs = surface.split_right(
             NodeIndex::root(),
             0.27,
             vec![ItemTabsData::Resources(resources_tab)],
         );
 
-        tree.split_right(tabs[1], 0.5, vec![ItemTabsData::Monsters(monsters_tab)]);
-        tree.split_below(tabs[0], 0.5, vec![ItemTabsData::WishList(wish_list_tab)]);
+        surface.split_right(tabs[1], 0.5, vec![ItemTabsData::Monsters(monsters_tab)]);
+        surface.split_below(tabs[0], 0.5, vec![ItemTabsData::WishList(wish_list_tab)]);
 
-        Self { tree }
+        Self { dock_state }
     }
 
     pub fn show(
@@ -71,10 +72,17 @@ impl ItemsWindow {
                     current_sub_area,
                 );
 
-                DockArea::new(&mut self.tree)
+                DockArea::new(&mut self.dock_state)
                     .show_close_buttons(false)
                     .style(Style::from_egui(ui.style().as_ref()))
                     .show_inside(ui, &mut tab_viewer);
             });
+    }
+
+    pub(crate) fn get_sized_texture(image: &Image) -> SizedTexture {
+        SizedTexture {
+            id: image.handle.id(),
+            size: MainWindow::ITEM_IMAGE_SIZE,
+        }
     }
 }

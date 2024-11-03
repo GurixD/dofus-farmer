@@ -6,7 +6,10 @@ use std::{
 
 use crate::{
     database::models::{item::Item, sub_area::SubArea},
-    windows::main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
+    windows::{
+        items_window::ItemsWindow,
+        main_window::{AsyncStatus, Image, ItemsRelations},
+    },
 };
 
 use egui::{ImageButton, Layout, PointerButton, Ui, Vec2};
@@ -69,10 +72,9 @@ impl ResourcesTab {
                             Layout::top_down(egui::Align::Min),
                             |ui| {
                                 ui.group(|ui| {
-                                    let button = ImageButton::new(
-                                        image.handle.id(),
-                                        MainWindow::ITEM_IMAGE_SIZE,
-                                    );
+                                    let button = ImageButton::new(egui::Image::from_texture(
+                                        ItemsWindow::get_sized_texture(image),
+                                    ));
 
                                     let response = ui.add(button).on_hover_text(&item.name);
                                     if response.clicked_by(PointerButton::Primary) {

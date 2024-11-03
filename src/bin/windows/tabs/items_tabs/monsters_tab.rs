@@ -7,7 +7,10 @@ use egui::{ImageButton, Ui};
 
 use crate::{
     database::models::{monster::Monster, sub_area::SubArea},
-    windows::main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
+    windows::{
+        items_window::ItemsWindow,
+        main_window::{AsyncStatus, Image, ItemsRelations},
+    },
 };
 
 pub struct MonstersTab;
@@ -50,7 +53,9 @@ impl MonstersTab {
         ui.horizontal_wrapped(|ui| {
             all_monsters.iter().for_each(|&monster| {
                 if let Some(AsyncStatus::Ready(image)) = monsters_images.get(monster) {
-                    let button = ImageButton::new(image.handle.id(), MainWindow::ITEM_IMAGE_SIZE);
+                    let button = ImageButton::new(egui::Image::from_texture(
+                        ItemsWindow::get_sized_texture(&image),
+                    ));
                     let response = ui.add(button);
                     response.on_hover_text(&monster.name);
                 }

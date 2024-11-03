@@ -6,19 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-diesel = { version = "2.1.0", default-features = false, features = ["postgres", "r2d2"] }
+diesel = { version = "2.1.0", default-features = false, features = [
+    "postgres",
+    "r2d2",
+] }
 dotenvy = "0.15.7"
-eframe = { version = "0.22.0", default-features = false, features = [
+eframe = { version = "0.29.1", default-features = false, features = [
     "default_fonts", # Embed the default egui fonts.
     "glow",          # Use the glow rendering backend. Alternative: "wgpu".
 ] }
-egui = { version = "0.22.0", features = [] }
-egui-modal = "0.2.4"
-egui_dock = "0.6.3"
-image = "0.24.6"
-itertools = "0.11.0"
-lombok = "0.3.3"
+egui = { version = "0.29.1", features = [] }
+egui-modal = "0.5.0"
+egui_dock = "0.14.0"
+image = "0.25.4"
+itertools = "0.13.0"
+lombok = "0.4.0"
 serde_json = "1.0.99"
 tokio = { version = "1.28.2", features = ["rt", "rt-multi-thread", "sync"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"
+winapi = { version = "0.3.9", features = ["winuser"] }

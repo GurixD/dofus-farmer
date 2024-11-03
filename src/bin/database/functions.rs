@@ -1,3 +1,3 @@
-use diesel::{sql_function, sql_types::*};
+use diesel::{define_sql_function, sql_types::*};
 
-sql_function!(fn f_unaccent(x: Text) -> Text);
+define_sql_function!(fn f_unaccent(x: Text) -> Text);
