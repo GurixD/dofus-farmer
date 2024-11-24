@@ -15,10 +15,7 @@ use tracing::trace_span;
 
 use crate::{
     database::models::item::Item,
-    windows::{
-        items_window::ItemsWindow,
-        main_window::{AsyncStatus, Image},
-    },
+    windows::{image::Image, items_window::ItemsWindow, main_window::AsyncStatus},
 };
 
 pub struct SearchItemTab {
@@ -31,7 +28,7 @@ pub struct SearchItemTab {
     items_rx: Receiver<(String, Vec<Item>)>,
     item_image_tx: Sender<(usize, Image)>,
     item_image_rx: Receiver<(usize, Image)>,
-    item_clicked_tx: Sender<(Item, usize)>,
+    item_clicked_tx: Sender<(Item, i16)>,
     current_search_thread: Option<(String, JoinHandle<()>)>,
 }
 
@@ -40,9 +37,10 @@ impl SearchItemTab {
 
     pub fn new(
         pool: Pool<ConnectionManager<PgConnection>>,
-        item_clicked_tx: Sender<(Item, usize)>,
+        item_clicked_tx: Sender<(Item, i16)>,
     ) -> Self {
-        let search_bar_text = Default::default();
+        // let search_bar_text = Default::default();
+        let search_bar_text = "test4".to_owned();
         let modal_quantity = Default::default();
         let modal_clicked_item = None;
         let items = Default::default();
@@ -94,7 +92,7 @@ impl SearchItemTab {
                     self.modal_clicked_item = None;
                     quantity_modal.close();
                 } else if ui.button("Add").clicked() {
-                    if let Ok(quantity) = self.modal_quantity.parse::<usize>() {
+                    if let Ok(quantity) = self.modal_quantity.parse::<i16>() {
                         let item = self.modal_clicked_item.take();
                         self.item_clicked_tx
                             .send((item.unwrap(), quantity))

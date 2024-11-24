@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc, sync::mpsc::Sender};
+use std::{collections::HashMap, sync::mpsc::Sender};
 
 use diesel::{
     r2d2::{ConnectionManager, Pool},
@@ -8,10 +8,15 @@ use egui::{load::SizedTexture, Context, Vec2, Window};
 use egui_dock::{DockArea, DockState, NodeIndex, Style};
 use tracing::trace_span;
 
-use crate::database::models::{item::Item, monster::Monster, sub_area::SubArea};
+use crate::database::models::{
+    item::{Item, ItemList},
+    monster::Monster,
+    sub_area::SubArea,
+};
 
 use super::{
-    main_window::{AsyncStatus, Image, ItemsRelations, MainWindow},
+    image::Image,
+    main_window::{AsyncStatus, ItemsRelations, MainWindow},
     tabs::items_tabs::{
         item_tab_viewer::ItemTabsViewer, item_tabs_data::ItemTabsData, monsters_tab::MonstersTab,
         resources_tab::ResourcesTab, search_item_tabs::SearchItemTab, wish_list_tab::WishListTab,
@@ -25,9 +30,9 @@ pub struct ItemsWindow {
 impl ItemsWindow {
     pub fn new(
         pool: Pool<ConnectionManager<PgConnection>>,
-        item_clicked_tx: Sender<(Item, usize)>,
+        item_clicked_tx: Sender<(Item, i16)>,
         new_ingredient_tx: Sender<(Item, isize)>,
-        remove_item_tx: Sender<(Item, usize, bool)>,
+        remove_item_tx: Sender<(Item, i16, bool)>,
     ) -> Self {
         let wish_list_tab = WishListTab::new(remove_item_tx);
         let resources_tab = ResourcesTab::new(new_ingredient_tx);
@@ -52,9 +57,10 @@ impl ItemsWindow {
         &mut self,
         ctx: &Context,
         items: &ItemsRelations,
-        ingredient_quantity: &HashMap<Item, usize>,
-        items_images: &HashMap<Rc<Item>, AsyncStatus<Image>>,
-        monsters_images: &HashMap<Rc<Monster>, AsyncStatus<Image>>,
+        ingredients_quantity: &ItemList,
+        calculated_inventory: &ItemList,
+        items_images: &HashMap<Item, AsyncStatus<Image>>,
+        monsters_images: &HashMap<Monster, AsyncStatus<Image>>,
         current_sub_area: &Option<SubArea>,
     ) {
         Window::new("Items")
@@ -66,7 +72,8 @@ impl ItemsWindow {
 
                 let mut tab_viewer = ItemTabsViewer::new(
                     items,
-                    ingredient_quantity,
+                    ingredients_quantity,
+                    calculated_inventory,
                     items_images,
                     monsters_images,
                     current_sub_area,

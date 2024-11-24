@@ -34,6 +34,7 @@ fn main() {
             fill_drops(connection);
             fill_recipes(connection);
             fill_monsters_sub_areas(connection);
+            fill_test_data(connection);
 
             QueryResult::Ok(())
         })
@@ -369,6 +370,32 @@ fn fill_monsters_sub_areas(connection: &mut PgConnection) {
     );
 
     println!("End fill_monsters_sub_areas");
+}
+
+fn fill_test_data(connection: &mut PgConnection) {
+    use crate::database::schema::items;
+    use crate::database::schema::recipes;
+
+    let test1 = Item::new(69696969, "test1".to_owned(), 0, 151076);
+    let test2 = Item::new(69696970, "test2".to_owned(), 0, 151077);
+    let test3 = Item::new(69696971, "test3".to_owned(), 0, 151078);
+    let test4 = Item::new(69696972, "test4".to_owned(), 0, 151075);
+
+    let test_items = [test1.clone(), test2.clone(), test3.clone(), test4.clone()];
+    insert_into(items::table)
+        .values(test_items)
+        .execute(connection)
+        .unwrap();
+
+    let test_recipe1 = Recipe::new(test2.id, test1.id, 10);
+    let test_recipe2 = Recipe::new(test3.id, test2.id, 10);
+    let test_recipe3 = Recipe::new(test4.id, test3.id, 10);
+
+    let test_recipes = [test_recipe1, test_recipe2, test_recipe3];
+    insert_into(recipes::table)
+        .values(test_recipes)
+        .execute(connection)
+        .unwrap();
 }
 
 fn fill_table<F1: Fn(&str) -> String, F2: Fn(&Vec<Value>, &mut PgConnection)>(

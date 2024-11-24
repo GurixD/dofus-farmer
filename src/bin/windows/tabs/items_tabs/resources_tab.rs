@@ -1,35 +1,45 @@
 use std::{
+    cmp,
     collections::{BTreeMap, HashMap},
-    rc::Rc,
     sync::mpsc::Sender,
 };
 
 use crate::{
-    database::models::{item::Item, sub_area::SubArea},
+    database::models::{
+        item::{Item, ItemList},
+        sub_area::SubArea,
+    },
     windows::{
+        image::Image,
         items_window::ItemsWindow,
-        main_window::{AsyncStatus, Image, ItemsRelations},
+        main_window::{AsyncStatus, ItemsRelations},
     },
 };
 
-use egui::{ImageButton, Layout, PointerButton, Ui, Vec2};
+use egui::{ImageButton, Key, Layout, PointerButton, Ui, Vec2};
 use egui_modal::Modal;
 
 pub struct ResourcesTab {
     new_ingredient_tx: Sender<(Item, isize)>,
     modal_clicked_item: Option<Item>,
     modal_quantity: String,
+    current_page: usize,
+    max_page: usize,
 }
 
 impl ResourcesTab {
     pub fn new(new_ingredient_tx: Sender<(Item, isize)>) -> Self {
         let modal_clicked_item = Default::default();
         let modal_quantity = Default::default();
+        let current_page = 1;
+        let max_page = 10; // todo
 
         Self {
             new_ingredient_tx,
             modal_clicked_item,
             modal_quantity,
+            current_page,
+            max_page,
         }
     }
 
@@ -37,39 +47,68 @@ impl ResourcesTab {
         &mut self,
         ui: &mut Ui,
         items: &ItemsRelations,
-        items_images: &HashMap<Rc<Item>, AsyncStatus<Image>>,
-        ingredient_quantity: &HashMap<Item, usize>,
+        items_images: &HashMap<Item, AsyncStatus<Image>>,
+        _ingredients_quantity: &ItemList,
+        calculated_inventory: &ItemList,
         current_sub_area: &Option<SubArea>,
     ) {
-        // Same as ingredient_quantity but with quantity needed
-        let mut ingredients_total = BTreeMap::new();
+        if ui.input(|reader| reader.key_pressed(Key::ArrowLeft)) {
+            self.current_page = self.current_page.checked_sub(1).unwrap_or(1);
+        }
+        if ui.input(|reader| reader.key_pressed(Key::ArrowRight)) {
+            self.current_page += 1;
+        }
 
+        self.current_page = cmp::max(cmp::min(self.current_page, self.max_page), 1);
+
+        // Same as ingredient_quantity but with quantity needed
+        let mut showed_ingredients = BTreeMap::new();
+
+        self.max_page = 1;
         items.iter().for_each(|(_, (quantity, ingredients))| {
-            if let AsyncStatus::Ready(ingredients) = ingredients {
-                ingredients
-                    .iter()
-                    .for_each(|(ingredient, (needed, monsters))| {
-                        let show_this = if let Some(sub_area) = current_sub_area {
-                            monsters
-                                .iter()
-                                .any(|(_, sub_areas)| sub_areas.contains(sub_area))
-                        } else {
-                            true
-                        };
-                        if show_this {
-                            ingredients_total
-                                .entry(ingredient)
-                                .and_modify(|(needed_total, _)| {
-                                    *needed_total += needed * quantity;
-                                })
-                                .or_insert_with(|| {
-                                    (
-                                        *needed * quantity,
-                                        ingredient_quantity.get(ingredient).unwrap_or(&0),
-                                    )
-                                });
-                        }
+            if let AsyncStatus::Ready((ingredients, steps)) = ingredients {
+                self.max_page = cmp::max(self.max_page, steps.len() + 1);
+
+                if self.current_page == 1 {
+                    ingredients
+                        .iter()
+                        .for_each(|(ingredient, (needed, monsters))| {
+                            let show_this = if let Some(sub_area) = current_sub_area {
+                                monsters
+                                    .iter()
+                                    .any(|(_, sub_areas)| sub_areas.contains(sub_area))
+                            } else {
+                                true
+                            };
+                            if show_this {
+                                showed_ingredients
+                                    .entry(ingredient)
+                                    .and_modify(|(needed_total, _)| {
+                                        *needed_total += needed * quantity;
+                                    })
+                                    .or_insert_with(|| {
+                                        (
+                                            *needed * quantity,
+                                            calculated_inventory.get(ingredient).unwrap_or(&0),
+                                        )
+                                    });
+                            }
+                        });
+                } else if let Some(steps) = steps.get(self.current_page - 2) {
+                    steps.iter().for_each(|(item_step, needed)| {
+                        showed_ingredients
+                            .entry(item_step)
+                            .and_modify(|(current_needed, _)| {
+                                *current_needed += needed * quantity;
+                            })
+                            .or_insert_with(|| {
+                                (
+                                    *needed * quantity,
+                                    calculated_inventory.get(item_step).unwrap_or(&0),
+                                )
+                            });
                     });
+                }
             }
         });
 
@@ -93,8 +132,9 @@ impl ResourcesTab {
             });
         });
 
+        ui.vertical_centered(|ui| ui.label(format!("{}/{}", self.current_page, self.max_page)));
         ui.horizontal_wrapped(|ui| {
-            ingredients_total
+            showed_ingredients
                 .iter()
                 .for_each(|(&item, (needed, &in_inventory))| {
                     if let Some(AsyncStatus::Ready(image)) = items_images.get(item) {
@@ -109,17 +149,15 @@ impl ResourcesTab {
 
                                     let response = ui.add(button).on_hover_text(&item.name);
                                     if response.clicked_by(PointerButton::Primary) {
-                                        self.new_ingredient_tx
-                                            .send((item.as_ref().clone(), 1))
-                                            .unwrap();
+                                        self.new_ingredient_tx.send((item.clone(), 1)).unwrap();
                                     } else if response.clicked_by(PointerButton::Secondary) {
-                                        self.modal_clicked_item = Some(item.as_ref().clone());
+                                        self.modal_clicked_item = Some(item.clone());
                                         self.modal_quantity = Default::default();
                                         quantity_modal.open();
                                     } else if response.clicked_by(PointerButton::Middle) {
                                         self.new_ingredient_tx
                                             .send((
-                                                item.as_ref().clone(),
+                                                item.clone(),
                                                 *needed as isize - in_inventory as isize,
                                             ))
                                             .unwrap();

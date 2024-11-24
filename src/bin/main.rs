@@ -1,4 +1,5 @@
-#![warn(clippy::all, rust_2018_idioms)]
+#![warn(clippy::all)]
+#![allow(clippy::too_many_arguments)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 mod database;
@@ -7,7 +8,9 @@ mod windows;
 use crate::database::connection::establish_pooled_connection;
 use eframe::NativeOptions;
 use tokio::runtime::Runtime;
+use tracing::level_filters::LevelFilter;
 use tracing::trace_span;
+use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::Registry;
@@ -17,9 +20,11 @@ fn main() {
     let stdout_log = tracing_subscriber::fmt::layer()
         .with_span_events(FmtSpan::ACTIVE)
         .pretty();
-    let _subscriber = Registry::default().with(stdout_log);
+    let _subscriber = Registry::default()
+        .with(stdout_log)
+        .with(LevelFilter::from_level(Level::INFO));
 
-    // tracing::subscriber::set_global_default(_subscriber).expect("Unable to set global subscriber");
+    tracing::subscriber::set_global_default(_subscriber).expect("Unable to set global subscriber");
 
     start().unwrap();
 }
