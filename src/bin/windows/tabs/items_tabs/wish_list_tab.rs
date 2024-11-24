@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc, sync::mpsc::Sender};
+use std::{collections::HashMap, sync::mpsc::Sender};
 
 use egui::{ImageButton, Layout, PointerButton, Ui, Vec2};
 use egui_modal::Modal;
@@ -6,20 +6,21 @@ use egui_modal::Modal;
 use crate::{
     database::models::{item::Item, sub_area::SubArea},
     windows::{
+        image::Image,
         items_window::ItemsWindow,
-        main_window::{AsyncStatus, Image, ItemsRelations},
+        main_window::{AsyncStatus, ItemsRelations},
     },
 };
 
 pub struct WishListTab {
-    remove_item_tx: Sender<(Item, usize, bool)>,
+    remove_item_tx: Sender<(Item, i16, bool)>,
     modal_quantity: String,
     modal_craft: bool,
     modal_clicked_item: Option<Item>,
 }
 
 impl WishListTab {
-    pub fn new(remove_item_tx: Sender<(Item, usize, bool)>) -> Self {
+    pub fn new(remove_item_tx: Sender<(Item, i16, bool)>) -> Self {
         let modal_quantity = Default::default();
         let modal_craft = false;
         let modal_clicked_item = Default::default();
@@ -36,7 +37,7 @@ impl WishListTab {
         &mut self,
         ui: &mut Ui,
         items: &ItemsRelations,
-        items_images: &HashMap<Rc<Item>, AsyncStatus<Image>>,
+        items_images: &HashMap<Item, AsyncStatus<Image>>,
         current_sub_area: &Option<SubArea>,
     ) {
         let quantity_modal = Modal::new(ui.ctx(), "wish list modal");
@@ -49,7 +50,7 @@ impl WishListTab {
                     self.modal_clicked_item = None;
                     quantity_modal.close();
                 } else if ui.button("Add").clicked() {
-                    if let Ok(quantity) = self.modal_quantity.parse::<usize>() {
+                    if let Ok(quantity) = self.modal_quantity.parse::<i16>() {
                         let item = self.modal_clicked_item.take();
                         self.remove_item_tx
                             .send((item.unwrap(), quantity, self.modal_craft))
@@ -66,7 +67,7 @@ impl WishListTab {
                     let show_this = current_sub_area
                         .clone()
                         .map(|sub_area| {
-                            if let AsyncStatus::Ready(ingredients) = ingredients {
+                            if let AsyncStatus::Ready((ingredients, _steps)) = ingredients {
                                 return ingredients.iter().any(|(_, (_, monsters))| {
                                     monsters
                                         .iter()
@@ -90,15 +91,11 @@ impl WishListTab {
                                     let response = ui.add(button).on_hover_text(&item.name);
 
                                     if response.clicked_by(PointerButton::Primary) {
-                                        self.remove_item_tx
-                                            .send((item.as_ref().clone(), 1, true))
-                                            .unwrap();
+                                        self.remove_item_tx.send((item.clone(), 1, true)).unwrap();
                                     } else if response.clicked_by(PointerButton::Secondary) {
-                                        self.remove_item_tx
-                                            .send((item.as_ref().clone(), 1, false))
-                                            .unwrap();
+                                        self.remove_item_tx.send((item.clone(), 1, false)).unwrap();
                                     } else if response.clicked_by(PointerButton::Middle) {
-                                        self.modal_clicked_item = Some(item.as_ref().clone());
+                                        self.modal_clicked_item = Some(item.clone());
                                         self.modal_quantity = Default::default();
                                         quantity_modal.open();
                                     }

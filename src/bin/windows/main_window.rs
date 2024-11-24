@@ -1,7 +1,6 @@
 use std::{
     cmp,
     collections::{BTreeMap, HashMap, HashSet},
-    rc::Rc,
     sync::mpsc::{self, Receiver, Sender},
 };
 
@@ -11,24 +10,29 @@ use diesel::{
     update, PgConnection,
 };
 use egui::{
-    CentralPanel, Color32, ColorImage, Context, Frame, InputState, PointerButton, Pos2, Rect,
-    Rounding, TextureHandle, Ui, Vec2,
+    CentralPanel, Color32, Context, Frame, InputState, PointerButton, Pos2, Rect, Rounding, Ui,
+    Vec2,
 };
-use image::ImageReader;
 use lombok::AllArgsConstructor;
-use tracing::{trace_span, warn};
+use tracing::{event, trace_span, warn, Level};
 
 use crate::database::{
     models::{
-        drop::Drop, item::Item, map::Map, monster::Monster, monster_sub_area::MonsterSubArea,
-        recipe::Recipe, sub_area::SubArea, user_ingredient::UserIngredient, user_item::UserItem,
+        drop::Drop,
+        item::{Item, ItemList},
+        map::Map,
+        monster::Monster,
+        monster_sub_area::MonsterSubArea,
+        sub_area::SubArea,
+        user_ingredient::UserIngredient,
+        user_item::UserItem,
     },
     schema::maps,
 };
 
-use super::items_window::ItemsWindow;
+use super::{image::Image, items_window::ItemsWindow};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum AsyncStatus<T> {
     Loading,
     Ready(T),
@@ -42,70 +46,28 @@ pub struct MapMinMax {
     y_max: i16,
 }
 
-#[derive(AllArgsConstructor, Clone)]
-pub struct Image {
-    pub handle: TextureHandle,
-    pub used: bool,
-}
-
-impl Image {
-    pub fn from_path(ctx: &Context, path: &str) -> Self {
-        // Images start at 1
-        let color_image = Self::load_image_from_path(path);
-        let handle = ctx.load_texture(path.to_owned(), color_image, Default::default());
-
-        Image::new(handle, true)
-    }
-
-    pub fn from_ui_and_index(ctx: &Context, index: u16, zoom: f32) -> Self {
-        // Images start at 1
-        let path = format!("src/resources/images/worldmap/{}/{}.jpg", zoom, index + 1);
-        Self::from_path(ctx, &path)
-    }
-
-    pub fn item_from_image_id(ctx: &Context, id: i32) -> Self {
-        let path = format!("src/resources/images/items/{id}.png");
-        Self::from_path(ctx, &path)
-    }
-
-    pub fn monster_from_id(ctx: &Context, id: i32) -> Self {
-        let path = format!("src/resources/images/monsters/{id}.png");
-        Self::from_path(ctx, &path)
-    }
-
-    fn load_image_from_path(path: &str) -> ColorImage {
-        let span = trace_span!("draw_map_body_loop");
-        let _guard = span.enter();
-
-        // println!("{path}");
-        let image = ImageReader::open(path).unwrap().decode().unwrap();
-        let size = [image.width() as _, image.height() as _];
-        let image_buffer = image.to_rgba8();
-        let pixels = image_buffer.as_flat_samples();
-        ColorImage::from_rgba_unmultiplied(size, pixels.as_slice())
-    }
-}
-
 pub type ItemsRelations = BTreeMap<
-    Rc<Item>, // item to craft
+    Item, // item to craft
     (
-        usize, // quantity
-        AsyncStatus<
+        i16, // quantity
+        AsyncStatus<(
             HashMap<
-                Rc<Item>, // one of the resources needed to make it
+                Item, // one of the resources needed to make it
                 (
-                    usize,                                  // quantity needed
-                    HashMap<Rc<Monster>, HashSet<SubArea>>, // monsters and their sub areas
+                    i16,                                // quantity needed
+                    HashMap<Monster, HashSet<SubArea>>, // monsters and their sub areas
                 ),
             >,
-        >,
+            Vec<ItemList>, // ingredient steps
+        )>,
     ),
 >;
 
 type Ingredients = (
     Item,
-    usize,
-    HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)>,
+    i16,
+    HashMap<Item, (i16, HashMap<Monster, HashSet<SubArea>>)>,
+    Vec<ItemList>,
 );
 
 pub struct MainWindow {
@@ -120,19 +82,20 @@ pub struct MainWindow {
     clicked_map: Option<(f32, f32)>,
     map_tx: Sender<(Image, u16, usize)>,
     map_rx: Receiver<(Image, u16, usize)>,
-    item_rx: Receiver<(Item, usize)>,
-    remove_item_rx: Receiver<(Item, usize, bool)>,
+    item_rx: Receiver<(Item, i16)>,
+    remove_item_rx: Receiver<(Item, i16, bool)>,
     item_ingredients_tx: Sender<Ingredients>,
     item_ingredients_rx: Receiver<Ingredients>,
     item_image_tx: Sender<(Item, Image)>,
     item_image_rx: Receiver<(Item, Image)>,
-    items_images: HashMap<Rc<Item>, AsyncStatus<Image>>,
+    items_images: HashMap<Item, AsyncStatus<Image>>,
     monster_image_tx: Sender<(Monster, Image)>,
     monster_image_rx: Receiver<(Monster, Image)>,
     new_ingredient_rx: Receiver<(Item, isize)>,
-    monsters_images: HashMap<Rc<Monster>, AsyncStatus<Image>>,
+    monsters_images: HashMap<Monster, AsyncStatus<Image>>,
     items: ItemsRelations,
-    ingredients_quantity: HashMap<Item, usize>,
+    ingredients_quantity: ItemList,
+    calculated_inventory: ItemList,
     items_window: ItemsWindow,
     pool: Pool<ConnectionManager<PgConnection>>,
 }
@@ -189,6 +152,7 @@ impl MainWindow {
                 min_max.3 as _,
             )
         };
+
         let sub_areas = {
             use crate::database::schema::sub_areas;
             use diesel::prelude::*;
@@ -214,6 +178,7 @@ impl MainWindow {
 
             maps_per_sub_area
         };
+
         let ingredients_quantity = {
             use crate::database::schema::{items, user_ingredients, user_items};
             use diesel::prelude::*;
@@ -227,14 +192,19 @@ impl MainWindow {
                 item_tx.send((item, user_item.quantity as _)).unwrap()
             });
 
-            user_ingredients::table
-                .inner_join(items::table)
-                .load::<(UserIngredient, Item)>(&mut connection)
-                .unwrap()
-                .into_iter()
-                .map(|(user_ingredient, item)| (item, user_ingredient.quantity as usize))
-                .collect()
+            ItemList::with_items(
+                user_ingredients::table
+                    .inner_join(items::table)
+                    .load::<(UserIngredient, Item)>(&mut connection)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(user_ingredient, item)| (item, user_ingredient.quantity))
+                    .collect(),
+            )
         };
+
+        let calculated_inventory =
+            Self::get_calculated_inventory(&ingredients_quantity, &mut connection);
 
         let current_sub_area = None;
         let clicked_map = None;
@@ -272,6 +242,7 @@ impl MainWindow {
             monsters_images,
             items,
             ingredients_quantity,
+            calculated_inventory,
             items_window,
             pool,
         }
@@ -380,7 +351,7 @@ impl MainWindow {
         let mut still_needed_ingredients_total = HashMap::new();
 
         self.items.iter().for_each(|(_, (quantity, ingredients))| {
-            if let AsyncStatus::Ready(ingredients) = ingredients {
+            if let AsyncStatus::Ready((ingredients, _steps)) = ingredients {
                 ingredients.iter().for_each(|(ingredient, (needed, _))| {
                     still_needed_ingredients_total
                         .entry(ingredient)
@@ -401,7 +372,7 @@ impl MainWindow {
 
         let mut sub_areas_to_draw = HashSet::new();
         self.items.iter().for_each(|(_, (_, ingredients))| {
-            if let AsyncStatus::Ready(ingredients) = ingredients {
+            if let AsyncStatus::Ready((ingredients, _steps)) = ingredients {
                 ingredients.iter().for_each(|(ingredient, (_, monsters))| {
                     if still_needed_ingredients_total.contains_key(ingredient) {
                         monsters.iter().for_each(|(_, sub_areas)| {
@@ -450,7 +421,7 @@ impl MainWindow {
             });
 
             if self.items.iter().any(|(_, (_, ingredients))| {
-                if let AsyncStatus::Ready(ingredients) = ingredients {
+                if let AsyncStatus::Ready((ingredients, _steps)) = ingredients {
                     return ingredients.iter().any(|(_, (_, monsters))| {
                         monsters
                             .iter()
@@ -593,7 +564,7 @@ impl MainWindow {
         let zoom_index = self.zoom_index;
         let zoom = Self::ZOOMS[zoom_index];
         tokio::spawn(async move {
-            let image = Image::from_ui_and_index(&ctx, index, zoom);
+            let image = Image::map_from_ui_and_index(&ctx, index, zoom);
             tx.send((image, index, zoom_index)).unwrap();
             ctx.request_repaint();
         });
@@ -605,6 +576,7 @@ impl MainWindow {
 
         tokio::spawn(async move {
             let image = Image::item_from_image_id(&ctx, item.image_id);
+            event!(Level::INFO, "Loaded item image {}", item.name);
             tx.send((item, image)).unwrap();
             ctx.request_repaint();
         });
@@ -635,28 +607,21 @@ impl MainWindow {
             });
     }
 
+    // New item to craft / to have
     fn check_for_new_items(&mut self, ctx: &Context) {
         self.item_rx.try_iter().for_each(|(item, quantity)| {
             let new_quantity = if let Some((item_value, _)) = self.items.get_mut(&item) {
                 *item_value += quantity;
                 *item_value
             } else {
-                let item_rc = Rc::new(item.clone());
-
-                self.items_images
-                    .entry(Rc::clone(&item_rc))
-                    .or_insert_with(|| {
-                        Self::load_item_image(
-                            self.item_image_tx.clone(),
-                            ctx.clone(),
-                            item.clone(),
-                        );
-                        AsyncStatus::Loading
-                    });
+                self.items_images.entry(item.clone()).or_insert_with(|| {
+                    Self::load_item_image(self.item_image_tx.clone(), ctx.clone(), item.clone());
+                    AsyncStatus::Loading
+                });
 
                 self.items
-                    .insert(item_rc, (quantity as _, AsyncStatus::Loading));
-                Self::get_all_related(
+                    .insert(item.clone(), (quantity as _, AsyncStatus::Loading));
+                Self::load_recipe_of_item(
                     self.item_ingredients_tx.clone(),
                     self.pool.clone(),
                     item.clone(),
@@ -673,7 +638,7 @@ impl MainWindow {
 
             tokio::spawn(async move {
                 let mut connection = pool.get().unwrap();
-                let user_item = UserItem::new(item.id, new_quantity as i16);
+                let user_item = UserItem::new(item.id, new_quantity);
 
                 insert_into(user_items::table)
                     .values(&user_item)
@@ -686,66 +651,78 @@ impl MainWindow {
         });
     }
 
+    // Item to craft removed or crafted
     fn check_for_removed_item(&mut self) {
         self.remove_item_rx
             .try_iter()
-            .for_each(|(item, quantity, crafted)| {
-                let (value, ingredients) = self.items.get_mut(&item).unwrap();
+            .for_each(|(item, quantity_to_remove, crafted)| {
+                let (value, _) = self.items.get_mut(&item).unwrap();
 
                 // Cant remove more than what we have
-                let quantity = cmp::min(quantity, *value);
+                let quantity_to_remove = cmp::min(quantity_to_remove, *value);
+
+                *value -= quantity_to_remove;
 
                 if crafted {
-                    if let AsyncStatus::Ready(ingredients) = ingredients {
-                        ingredients.iter().for_each(|(item, (needed, _))| {
-                            if let Some(in_inventory) = self.ingredients_quantity.get_mut(item) {
-                                let to_remove = cmp::min(*in_inventory, needed * quantity);
-                                *in_inventory -= to_remove;
+                    let mut connection = self.pool.get().unwrap();
+                    let mut to_remove = item.get_recipe(&quantity_to_remove, &mut connection);
+                    let mut database_update = ItemList::new();
 
-                                let pool = self.pool.clone();
-                                let item_id = item.id;
-                                if *in_inventory == 0 {
-                                    self.ingredients_quantity.remove(item);
+                    while !to_remove.is_empty() {
+                        let (current_item_to_remove, mut current_quantity_to_remove) =
+                            to_remove.pop_first().unwrap();
 
-                                    tokio::spawn(async move {
-                                        use crate::database::schema::user_ingredients;
-                                        use diesel::prelude::*;
+                        self.ingredients_quantity
+                            .entry(current_item_to_remove.clone())
+                            .and_modify(|quantity| {
+                                let to_remove = cmp::min(*quantity, current_quantity_to_remove);
+                                *quantity -= to_remove;
+                                database_update.set_item(&current_item_to_remove, quantity);
+                                current_quantity_to_remove -= to_remove;
+                            });
 
-                                        let mut connection = pool.get().unwrap();
+                        if current_quantity_to_remove > 0
+                            && current_item_to_remove.has_recipe(&mut connection)
+                        {
+                            to_remove.add_items(
+                                &current_item_to_remove
+                                    .get_recipe(&current_quantity_to_remove, &mut connection),
+                            );
+                        }
+                    }
 
-                                        delete(user_ingredients::table)
-                                            .filter(user_ingredients::item_id.eq(item_id))
-                                            .execute(&mut connection)
-                                            .unwrap();
-                                    });
-                                } else {
-                                    let user_ingredient =
-                                        UserIngredient::new(item_id, *in_inventory as i16);
-                                    tokio::spawn(async move {
-                                        use crate::database::schema::user_ingredients;
-                                        use diesel::prelude::*;
+                    self.calculated_inventory =
+                        Self::get_calculated_inventory(&self.ingredients_quantity, &mut connection);
 
-                                        let mut connection = pool.get().unwrap();
+                    // Update database
+                    let pool = self.pool.clone();
+                    tokio::spawn(async move {
+                        use crate::database::schema::user_ingredients;
+                        use diesel::prelude::*;
 
-                                        update(user_ingredients::table)
-                                            .filter(
-                                                user_ingredients::item_id
-                                                    .eq(user_ingredient.item_id),
-                                            )
-                                            .set(&user_ingredient)
-                                            .execute(&mut connection)
-                                            .unwrap();
-                                    });
-                                }
+                        let mut connection = pool.get().unwrap();
+                        database_update.iter().for_each(|(item, quantity)| {
+                            if *quantity == 0 {
+                                delete(user_ingredients::table)
+                                    .filter(user_ingredients::item_id.eq(item.id))
+                                    .execute(&mut connection)
+                                    .unwrap();
+                            } else {
+                                let user_ingredient = UserIngredient::new(item.id, *quantity);
+                                update(user_ingredients::table)
+                                    .filter(user_ingredients::item_id.eq(user_ingredient.item_id))
+                                    .set(&user_ingredient)
+                                    .execute(&mut connection)
+                                    .unwrap();
                             }
                         });
-                    }
+                    });
                 }
 
                 let pool = self.pool.clone();
                 let item_id = item.id;
 
-                if *value == quantity {
+                if *value == 0 {
                     self.items.remove(&item);
 
                     tokio::spawn(async move {
@@ -760,9 +737,7 @@ impl MainWindow {
                             .unwrap();
                     });
                 } else {
-                    *value -= quantity;
-
-                    let user_item = UserItem::new(item_id, *value as i16);
+                    let user_item = UserItem::new(item_id, *value);
                     tokio::spawn(async move {
                         use crate::database::schema::user_items;
                         use diesel::prelude::*;
@@ -779,62 +754,72 @@ impl MainWindow {
             });
     }
 
+    // Ingredients for an item have been retrieved from database
     fn check_for_new_item_ingredients(&mut self, ctx: &Context) {
         self.item_ingredients_rx
             .try_iter()
-            .for_each(|(item, _, ingredients)| {
+            .for_each(|(item, _, ingredients, ingredient_steps)| {
                 if let Some((_, loading_ingredients)) = self.items.get_mut(&item) {
-                    let ingredients_rc: HashMap<_, _> = ingredients
+                    let ingredients: HashMap<_, _> = ingredients
                         .into_iter()
                         .map(|(ingredient, (quantity, monsters_sub_area))| {
-                            let ingredient_rc = if let Some((ingredient, _)) =
-                                self.items_images.get_key_value(&ingredient)
-                            {
-                                Rc::clone(ingredient)
-                            } else {
+                            if self.items_images.get_key_value(&ingredient).is_none() {
                                 Self::load_item_image(
                                     self.item_image_tx.clone(),
                                     ctx.clone(),
                                     ingredient.clone(),
                                 );
-                                let ingredient = Rc::new(ingredient);
                                 self.items_images
-                                    .insert(Rc::clone(&ingredient), AsyncStatus::Loading);
-                                ingredient
-                            };
+                                    .insert(ingredient.clone(), AsyncStatus::Loading);
+                            }
 
-                            let monsters_rc: HashMap<_, _> = monsters_sub_area
+                            let monsters: HashMap<_, _> = monsters_sub_area
                                 .into_iter()
                                 .map(|(monster, sub_areas)| {
                                     let monster = if let Some((monster, _)) =
                                         self.monsters_images.get_key_value(&monster)
                                     {
-                                        Rc::clone(monster)
+                                        monster.clone()
                                     } else {
                                         Self::load_monster_image(
                                             self.monster_image_tx.clone(),
                                             ctx.clone(),
                                             monster.clone(),
                                         );
-                                        let monster = Rc::new(monster);
                                         self.monsters_images
-                                            .insert(Rc::clone(&monster), AsyncStatus::Loading);
+                                            .insert(monster.clone(), AsyncStatus::Loading);
                                         monster
                                     };
 
                                     (monster, sub_areas)
                                 })
                                 .collect();
-                            (ingredient_rc, (quantity, monsters_rc))
+                            (ingredient, (quantity, monsters))
                         })
                         .collect();
-                    *loading_ingredients = AsyncStatus::Ready(ingredients_rc);
+
+                    ingredient_steps.iter().for_each(|step_list| {
+                        step_list.iter().for_each(|(step_item, _)| {
+                            if self.items_images.get_key_value(step_item).is_none() {
+                                Self::load_item_image(
+                                    self.item_image_tx.clone(),
+                                    ctx.clone(),
+                                    step_item.clone(),
+                                );
+                                self.items_images
+                                    .insert(step_item.clone(), AsyncStatus::Loading);
+                            }
+                        });
+                    });
+
+                    *loading_ingredients = AsyncStatus::Ready((ingredients, ingredient_steps));
                 } else {
                     warn!("new item ingredients empty item");
                 }
             });
     }
 
+    // New item in invetory
     fn check_for_new_ingredient_in_inventory(&mut self) {
         self.new_ingredient_rx
             .try_iter()
@@ -849,12 +834,17 @@ impl MainWindow {
                     })
                     .or_insert(cmp::max(quantity, 0) as _) as i16;
 
+                let pool = self.pool.clone();
+
+                self.calculated_inventory = Self::get_calculated_inventory(
+                    &self.ingredients_quantity,
+                    &mut pool.get().unwrap(),
+                );
+
                 let user_ingredient = UserIngredient {
                     quantity,
                     ..user_ingredient
                 };
-
-                let pool = self.pool.clone();
 
                 use crate::database::schema::user_ingredients;
                 use diesel::prelude::*;
@@ -879,6 +869,7 @@ impl MainWindow {
             });
     }
 
+    // Item image done loading
     fn check_for_new_items_images(&mut self) {
         self.item_image_rx.try_iter().for_each(|(item, image)| {
             if let Some(loading_image) = self.items_images.get_mut(&item) {
@@ -887,6 +878,7 @@ impl MainWindow {
         });
     }
 
+    // Monster image done loading
     fn check_for_new_monsters_images(&mut self) {
         self.monster_image_rx
             .try_iter()
@@ -897,99 +889,77 @@ impl MainWindow {
             });
     }
 
-    fn get_all_related(
+    fn load_recipe_of_item(
         tx: Sender<Ingredients>,
         pool: Pool<ConnectionManager<PgConnection>>,
         item: Item,
-        quantity: usize,
+        quantity: i16,
     ) {
         tokio::spawn(async move {
             use crate::database::schema::*;
             use diesel::prelude::*;
 
             let mut connection = pool.get().unwrap();
-            let (items_result, items_ingredient) =
-                diesel::alias!(items as items_result, items as items_ingredient);
 
-            let mut ingredients_quantity = HashMap::new();
-            let mut items_to_make = vec![(item.clone(), 1)];
+            let mut result_hash_map = HashMap::new();
 
-            while !items_to_make.is_empty() {
-                let (item, quantity) = items_to_make.pop().unwrap();
+            let (base_ingredients, ingredients_steps) = item.get_full_recipe(&1, &mut connection);
 
-                let result: Vec<(Item, Recipe, Item)> = items_result
+            base_ingredients.iter().for_each(|(ingredient, quantity)| {
+                let result: Vec<(SubArea, MonsterSubArea, Monster, Drop, Item)> = sub_areas::table
                     .inner_join(
-                        recipes::table
-                            .on(items_result.field(items::id).eq(recipes::result_item_id)),
+                        monsters_sub_areas::table
+                            .on(sub_areas::id.eq(monsters_sub_areas::sub_area_id)),
                     )
-                    .inner_join(
-                        items_ingredient.on(items_ingredient
-                            .field(items::id)
-                            .eq(recipes::ingredient_item_id)),
-                    )
-                    .filter(items_result.field(items::id).eq(item.id))
+                    .inner_join(monsters::table.on(monsters_sub_areas::monster_id.eq(monsters::id)))
+                    .inner_join(drops::table.on(monsters::id.eq(drops::monster_id)))
+                    .inner_join(items::table.on(drops::item_id.eq(items::id)))
+                    .filter(items::id.eq(ingredient.id))
                     .load(&mut connection)
                     .unwrap();
 
-                if result.is_empty() {
-                    ingredients_quantity
-                        .entry(item)
-                        .and_modify(|current_quantity| *current_quantity += quantity)
-                        .or_insert(quantity);
-                } else {
-                    items_to_make.extend(result.into_iter().map(
-                        |(_, recipe, items_ingredient)| (items_ingredient, (recipe.quantity * quantity) as _),
-                    ));
-                }
-            }
+                result_hash_map.insert(ingredient.clone(), (*quantity, Default::default()));
+                let mut sub_areas_for_monsters: HashMap<Monster, HashSet<SubArea>> = HashMap::new();
 
-            let mut result_hash_map: HashMap<Item, (usize, HashMap<Monster, HashSet<SubArea>>)> =
-                HashMap::new();
-
-            ingredients_quantity
-                .iter()
-                .for_each(|(ingredient, quantity)| {
-                    let result: Vec<(SubArea, MonsterSubArea, Monster, Drop, Item)> =
-                        sub_areas::table
-                            .inner_join(
-                                monsters_sub_areas::table
-                                    .on(sub_areas::id.eq(monsters_sub_areas::sub_area_id)),
-                            )
-                            .inner_join(
-                                monsters::table.on(monsters_sub_areas::monster_id.eq(monsters::id)),
-                            )
-                            .inner_join(drops::table.on(monsters::id.eq(drops::monster_id)))
-                            .inner_join(items::table.on(drops::item_id.eq(items::id)))
-                            .filter(items::id.eq(ingredient.id))
-                            .load(&mut connection)
-                            .unwrap();
-
-                    result_hash_map.insert(ingredient.clone(), ((*quantity).try_into().unwrap(), Default::default()));
-                    let mut sub_areas_for_monsters: HashMap<Monster, HashSet<SubArea>> =
-                        HashMap::new();
-
-                    result.into_iter().for_each(|(sub_area, _, monster, _, _)| {
-                        sub_areas_for_monsters
-                            .entry(monster)
-                            .and_modify(|sub_areas| {
-                                sub_areas.insert(sub_area.clone());
-                            })
-                            .or_insert_with(|| {
-                                let mut sub_areas = HashSet::new();
-                                sub_areas.insert(sub_area);
-                                sub_areas
-                            });
-                    });
-
-                    result_hash_map
-                        .entry(ingredient.clone())
-                        .and_modify(|(_, monsters)| {
-                            *monsters = sub_areas_for_monsters;
+                result.into_iter().for_each(|(sub_area, _, monster, _, _)| {
+                    sub_areas_for_monsters
+                        .entry(monster)
+                        .and_modify(|sub_areas| {
+                            sub_areas.insert(sub_area.clone());
+                        })
+                        .or_insert_with(|| {
+                            let mut sub_areas = HashSet::new();
+                            sub_areas.insert(sub_area);
+                            sub_areas
                         });
                 });
 
-            tx.send((item, quantity, result_hash_map)).unwrap();
+                result_hash_map
+                    .entry((*ingredient).clone())
+                    .and_modify(|(_, monsters)| {
+                        *monsters = sub_areas_for_monsters;
+                    });
+            });
+
+            tx.send((item, quantity, result_hash_map, ingredients_steps))
+                .unwrap();
         });
+    }
+
+    fn get_calculated_inventory(inventory: &ItemList, connection: &mut PgConnection) -> ItemList {
+        let mut calculated_inventory = ItemList::new();
+        inventory.iter().for_each(|(ingredient, quantity)| {
+            calculated_inventory.add_item(ingredient, quantity);
+            if ingredient.has_recipe(connection) {
+                let (base_ingredients, steps) = ingredient.get_full_recipe(quantity, connection);
+                calculated_inventory.add_items(&base_ingredients);
+                steps.iter().for_each(|step_list| {
+                    calculated_inventory.add_items(step_list);
+                });
+            }
+        });
+
+        calculated_inventory
     }
 
     fn zoom_in(&mut self, pointer_pos: Pos2) {
@@ -1047,6 +1017,7 @@ impl eframe::App for MainWindow {
             ctx,
             &self.items,
             &self.ingredients_quantity,
+            &self.calculated_inventory,
             &self.items_images,
             &self.monsters_images,
             &self.current_sub_area,
