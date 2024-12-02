@@ -33,6 +33,8 @@ Find the items images file in ```$DOFUS_PATH/content/gfx/items``` and unpack all
   
 Do the same with monsters and worldmap: from ```$DOFUS_PATH/content/gfx/monsters``` into ```src/resources/images/monsters``` and ```$DOFUS_PATH/content/gfx/maps``` into ```src/resources/images/worldmap``` (for this, keep only the folder "1" which means the main world map, and under it all the sizes: "0.2", "0.4", "0.6", "0.8", "1").
 
+Add an environment variable DOFUS_RESOURCES pointing to the "resources" directory.
+
 # Database
 setup postgresql container:
 ```docker-compose
