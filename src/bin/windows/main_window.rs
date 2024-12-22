@@ -16,18 +16,21 @@ use egui::{
 use lombok::AllArgsConstructor;
 use tracing::{event, trace_span, warn, Level};
 
-use crate::database::{
-    models::{
-        drop::Drop,
-        item::{Item, ItemList},
-        map::Map,
-        monster::Monster,
-        monster_sub_area::MonsterSubArea,
-        sub_area::SubArea,
-        user_ingredient::UserIngredient,
-        user_item::UserItem,
+use crate::{
+    data_loader::{data_loader::DataLoader, database_loader::DatabaseLoader},
+    database::{
+        models::{
+            drop::Drop,
+            item::{Item, ItemList},
+            map::Map,
+            monster::Monster,
+            monster_sub_area::MonsterSubArea,
+            sub_area::SubArea,
+            user_ingredient::UserIngredient,
+            user_item::UserItem,
+        },
+        schema::maps,
     },
-    schema::maps,
 };
 
 use super::{image::Image, items_window::ItemsWindow};
@@ -70,6 +73,8 @@ type Ingredients = (
     Vec<ItemList>,
 );
 
+type DefinedDataLoader = DatabaseLoader;
+
 pub struct MainWindow {
     zoom_index: usize,
     map_position: Pos2,
@@ -98,6 +103,7 @@ pub struct MainWindow {
     calculated_inventory: ItemList,
     items_window: ItemsWindow,
     pool: Pool<ConnectionManager<PgConnection>>,
+    data_loader: DefinedDataLoader,
 }
 
 impl MainWindow {
@@ -127,6 +133,10 @@ impl MainWindow {
         let (monster_image_tx, monster_image_rx) = mpsc::channel();
         let (new_ingredient_tx, new_ingredient_rx) = mpsc::channel();
 
+        let mut data_loader = DatabaseLoader::new(pool.clone());
+
+        let sub_areas = data_loader.load_all_sub_areas();
+
         let mut connection = pool.get().unwrap();
 
         let zoom_index = Self::STARTING_ZOOM_INDEX;
@@ -151,32 +161,6 @@ impl MainWindow {
                 min_max.2 as _,
                 min_max.3 as _,
             )
-        };
-
-        let sub_areas = {
-            use crate::database::schema::sub_areas;
-            use diesel::prelude::*;
-
-            let sub_areas = sub_areas::table
-                .select(SubArea::as_select())
-                .load(&mut connection)
-                .unwrap();
-
-            let maps = Map::belonging_to(&sub_areas)
-                .select(Map::as_select())
-                .load(&mut connection)
-                .unwrap();
-
-            let mut maps_per_sub_area: HashMap<SubArea, Vec<Map>> = maps
-                .grouped_by(&sub_areas)
-                .into_iter()
-                .zip(sub_areas)
-                .map(|(maps, sub_area)| (sub_area, maps))
-                .collect();
-
-            maps_per_sub_area.retain(|_, vec| !vec.is_empty());
-
-            maps_per_sub_area
         };
 
         let ingredients_quantity = {
@@ -245,6 +229,7 @@ impl MainWindow {
             calculated_inventory,
             items_window,
             pool,
+            data_loader,
         }
     }
 

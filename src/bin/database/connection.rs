@@ -19,7 +19,7 @@ pub fn establish_pooled_connection() -> Pool<ConnectionManager<PgConnection>> {
 
     trace!("Creating pool");
     Pool::builder()
-        .max_size(1)
+        .max_size(10)
         .build(manager)
         .expect("Failed to create pool.")
 }
