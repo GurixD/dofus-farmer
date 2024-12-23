@@ -16,6 +16,7 @@ path = "src/bin/import_data.rs"
 
 
 [dependencies]
+const_format = "0.2.34"
 diesel = { version = "2.1.0", default-features = false, features = [
     "postgres",
     "r2d2",
@@ -31,7 +32,10 @@ egui_dock = "0.14.0"
 image = "0.25.4"
 itertools = "0.13.0"
 lombok = "0.4.0"
-serde_json = "1.0.99"
+query_map = "0.7.0"
+reqwest = { version = "0.12.9", features = ["blocking"] }
+serde = { version = "1.0.216", features = ["serde_derive"] }
+serde_json = "1.0.134"
 tokio = { version = "1.28.2", features = ["rt", "rt-multi-thread", "sync"] }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.17"

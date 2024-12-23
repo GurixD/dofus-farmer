@@ -17,7 +17,9 @@ use lombok::AllArgsConstructor;
 use tracing::{event, trace_span, warn, Level};
 
 use crate::{
-    data_loader::{data_loader::DataLoader, database_loader::DatabaseLoader},
+    data_loader::{
+        data_loader::DataLoader, database_loader::DatabaseLoader, dofusdb::api_loader::ApiLoader,
+    },
     database::{
         models::{
             drop::Drop,
@@ -73,7 +75,7 @@ type Ingredients = (
     Vec<ItemList>,
 );
 
-type DefinedDataLoader = DatabaseLoader;
+type DefinedDataLoader = ApiLoader;
 
 pub struct MainWindow {
     zoom_index: usize,
@@ -133,7 +135,8 @@ impl MainWindow {
         let (monster_image_tx, monster_image_rx) = mpsc::channel();
         let (new_ingredient_tx, new_ingredient_rx) = mpsc::channel();
 
-        let mut data_loader = DatabaseLoader::new(pool.clone());
+        // let mut data_loader = DefinedDataLoader::new(pool.clone());
+        let mut data_loader = ApiLoader::new();
 
         let sub_areas = data_loader.load_all_sub_areas();
 
