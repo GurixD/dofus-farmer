@@ -45,10 +45,10 @@ pub enum AsyncStatus<T> {
 
 #[derive(AllArgsConstructor)]
 pub struct MapMinMax {
-    x_min: i16,
-    x_max: i16,
-    y_min: i16,
-    y_max: i16,
+    pub x_min: i16,
+    pub x_max: i16,
+    pub y_min: i16,
+    pub y_max: i16,
 }
 
 pub type ItemsRelations = BTreeMap<
@@ -144,27 +144,21 @@ impl MainWindow {
 
         let zoom_index = Self::STARTING_ZOOM_INDEX;
         let images_number = Self::image_number_from_zoom(zoom_index);
-        let map_min_max = {
-            use diesel::dsl::{max, min};
-            use diesel::prelude::*;
-
-            let min_max = maps::table
-                .select((
-                    min(maps::x).assume_not_null(),
-                    max(maps::x).assume_not_null(),
-                    min(maps::y).assume_not_null(),
-                    max(maps::y).assume_not_null(),
-                ))
-                .first::<(i16, i16, i16, i16)>(&mut connection)
-                .unwrap();
-
-            MapMinMax::new(
-                min_max.0 as _,
-                min_max.1 as _,
-                min_max.2 as _,
-                min_max.3 as _,
-            )
-        };
+        let map_min_max = sub_areas
+            .iter()
+            .flat_map(|(_, maps)| {
+                maps.iter()
+                    .map(|map| MapMinMax::new(map.x, map.x, map.y, map.y))
+            })
+            .reduce(|a, b| {
+                MapMinMax::new(
+                    cmp::min(a.x_min, b.x_min),
+                    cmp::max(a.x_max, b.x_max),
+                    cmp::min(a.y_min, b.y_min),
+                    cmp::max(a.y_max, b.y_max),
+                )
+            })
+            .unwrap();
 
         let ingredients_quantity = {
             use crate::database::schema::{items, user_ingredients, user_items};
