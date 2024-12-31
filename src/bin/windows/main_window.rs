@@ -135,8 +135,7 @@ impl MainWindow {
         let (monster_image_tx, monster_image_rx) = mpsc::channel();
         let (new_ingredient_tx, new_ingredient_rx) = mpsc::channel();
 
-        // let mut data_loader = DefinedDataLoader::new(pool.clone());
-        let mut data_loader = ApiLoader::new();
+        let mut data_loader = DefinedDataLoader::new(pool.clone(), item_tx.clone());
 
         let sub_areas = data_loader.load_all_sub_areas();
 
@@ -160,29 +159,7 @@ impl MainWindow {
             })
             .unwrap();
 
-        let ingredients_quantity = {
-            use crate::database::schema::{items, user_ingredients, user_items};
-            use diesel::prelude::*;
-
-            let user_items: Vec<(UserItem, Item)> = user_items::table
-                .inner_join(items::table)
-                .load(&mut connection)
-                .unwrap();
-
-            user_items.into_iter().for_each(|(user_item, item)| {
-                item_tx.send((item, user_item.quantity as _)).unwrap()
-            });
-
-            ItemList::with_items(
-                user_ingredients::table
-                    .inner_join(items::table)
-                    .load::<(UserIngredient, Item)>(&mut connection)
-                    .unwrap()
-                    .into_iter()
-                    .map(|(user_ingredient, item)| (item, user_ingredient.quantity))
-                    .collect(),
-            )
-        };
+        let ingredients_quantity = data_loader.load_initial_ingredients_quantity();
 
         let calculated_inventory =
             Self::get_calculated_inventory(&ingredients_quantity, &mut connection);

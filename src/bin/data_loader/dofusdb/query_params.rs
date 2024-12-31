@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QueryParams {
     inner: HashMap<String, Vec<String>>,
 }

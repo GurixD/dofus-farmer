@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
-pub struct MapPosition {
+pub struct MapPositionDto {
     pub id: i32,
     #[serde(rename = "posX")]
     pub x: i16,
