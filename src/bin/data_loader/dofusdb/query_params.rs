@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-#[derive(Debug)]
+use itertools::Itertools;
+
+#[derive(Debug, Clone)]
 pub struct QueryParams {
     inner: HashMap<String, Vec<String>>,
 }
@@ -35,6 +37,7 @@ impl QueryParams {
                     .map(|value| key.clone() + "=" + value)
                     .reduce(|current, next| current + "&" + &next)
             })
+            .sorted()
             .reduce(|current, next| current + "&" + &next)
             .unwrap_or_default()
     }
