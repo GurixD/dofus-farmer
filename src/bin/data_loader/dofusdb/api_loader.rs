@@ -38,8 +38,10 @@ impl ApiLoader {
     const MAP_POSITIONS_URL: &str = formatcp!("{}/map-positions", ApiLoader::BASE_URL);
     const ITEMS_URL: &str = formatcp!("{}/items", ApiLoader::BASE_URL);
     const LIMIT: u32 = 50;
+}
 
-    pub fn new(pool: Pool<ConnectionManager<PgConnection>>, item_tx: Sender<(Item, i16)>) -> Self {
+impl DataLoader for ApiLoader {
+    fn new(pool: Pool<ConnectionManager<PgConnection>>, item_tx: Sender<(Item, i16)>) -> Self {
         let client = ClientBuilder::new(Client::new())
             .with(DofusDbCache::default())
             .build();
@@ -49,9 +51,7 @@ impl ApiLoader {
             item_tx,
         }
     }
-}
 
-impl DataLoader for ApiLoader {
     #[tokio::main]
     async fn load_all_sub_areas(&self) -> HashMap<SubArea, Vec<Map>> {
         let mut query_params = QueryParams::new();
@@ -194,5 +194,39 @@ impl DataLoader for ApiLoader {
                 .map(|future| block_on(future))
                 .collect(),
         )
+    }
+    #[tokio::main]
+    async fn item_has_recipe(&self, item: &Item) -> bool {
+        let mut query_params = QueryParams::new();
+        query_params.set_param("$limit", "1");
+        query_params.set_param("id", &item.id.to_string());
+
+        let url = Self::ITEMS_URL.to_string() + "?" + &query_params.to_query_string();
+        let response = self.client.get(url).send().await.unwrap();
+        let json = from_str::<BaseResponse>(&response.text().await.unwrap()).unwrap();
+        let item = from_value::<Vec<ItemDto>>(json.data)
+            .unwrap()
+            .pop()
+            .unwrap();
+
+        item.has_recipe
+    }
+
+    fn get_calculated_inventory(&self, inventory: &ItemList) -> ItemList {
+        let mut connection = self.pool.get().unwrap();
+        let mut calculated_inventory = ItemList::new();
+        inventory.iter().for_each(|(ingredient, quantity)| {
+            calculated_inventory.add_item(ingredient, quantity);
+            if self.item_has_recipe(ingredient) {
+                let (base_ingredients, steps) =
+                    ingredient.get_full_recipe(quantity, &mut connection);
+                calculated_inventory.add_items(&base_ingredients);
+                steps.iter().for_each(|step_list| {
+                    calculated_inventory.add_items(step_list);
+                });
+            }
+        });
+
+        calculated_inventory
     }
 }

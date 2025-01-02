@@ -7,6 +7,7 @@ mod database;
 mod windows;
 
 use crate::database::connection::establish_pooled_connection;
+use data_loader::dofusdb::api_loader::ApiLoader;
 use eframe::NativeOptions;
 use tokio::runtime::Runtime;
 use tracing::level_filters::LevelFilter;
@@ -29,6 +30,8 @@ fn main() {
 
     start().unwrap();
 }
+
+type ChosenLoader = ApiLoader;
 
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,7 +61,10 @@ fn start() -> eframe::Result<()> {
             };
 
             creation_context.egui_ctx.set_style(style);
-            Ok(Box::new(MainWindow::new(creation_context, pool)))
+            Ok(Box::new(MainWindow::<ChosenLoader>::new(
+                creation_context,
+                pool,
+            )))
         }),
     )
 }

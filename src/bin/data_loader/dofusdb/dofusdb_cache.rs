@@ -26,6 +26,7 @@ impl Default for DofusDbCache {
         .unwrap();
 
         let directory = "http-cacache".to_string();
+
         Self { version, directory }
     }
 }

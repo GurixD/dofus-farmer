@@ -17,21 +17,16 @@ use lombok::AllArgsConstructor;
 use tracing::{event, trace_span, warn, Level};
 
 use crate::{
-    data_loader::{
-        data_loader::DataLoader, database_loader::DatabaseLoader, dofusdb::api_loader::ApiLoader,
-    },
-    database::{
-        models::{
-            drop::Drop,
-            item::{Item, ItemList},
-            map::Map,
-            monster::Monster,
-            monster_sub_area::MonsterSubArea,
-            sub_area::SubArea,
-            user_ingredient::UserIngredient,
-            user_item::UserItem,
-        },
-        schema::maps,
+    data_loader::data_loader::DataLoader,
+    database::models::{
+        drop::Drop,
+        item::{Item, ItemList},
+        map::Map,
+        monster::Monster,
+        monster_sub_area::MonsterSubArea,
+        sub_area::SubArea,
+        user_ingredient::UserIngredient,
+        user_item::UserItem,
     },
 };
 
@@ -75,9 +70,7 @@ type Ingredients = (
     Vec<ItemList>,
 );
 
-type DefinedDataLoader = ApiLoader;
-
-pub struct MainWindow {
+pub struct MainWindow<Loader: DataLoader> {
     zoom_index: usize,
     map_position: Pos2,
     clicked_position: Option<Pos2>,
@@ -105,10 +98,10 @@ pub struct MainWindow {
     calculated_inventory: ItemList,
     items_window: ItemsWindow,
     pool: Pool<ConnectionManager<PgConnection>>,
-    data_loader: DefinedDataLoader,
+    data_loader: Loader,
 }
 
-impl MainWindow {
+impl<Loader: DataLoader> MainWindow<Loader> {
     const IMAGE_SIZE: Vec2 = Vec2::new(250f32, 250f32);
     const FULL_IMAGE_SIZE: Vec2 = Vec2::new(10000f32, 8000f32);
     const ZOOMS: [f32; 5] = [0.2, 0.4, 0.6, 0.8, 1f32];
@@ -135,11 +128,9 @@ impl MainWindow {
         let (monster_image_tx, monster_image_rx) = mpsc::channel();
         let (new_ingredient_tx, new_ingredient_rx) = mpsc::channel();
 
-        let mut data_loader = DefinedDataLoader::new(pool.clone(), item_tx.clone());
+        let data_loader = Loader::new(pool.clone(), item_tx.clone());
 
         let sub_areas = data_loader.load_all_sub_areas();
-
-        let mut connection = pool.get().unwrap();
 
         let zoom_index = Self::STARTING_ZOOM_INDEX;
         let images_number = Self::image_number_from_zoom(zoom_index);
@@ -160,9 +151,7 @@ impl MainWindow {
             .unwrap();
 
         let ingredients_quantity = data_loader.load_initial_ingredients_quantity();
-
-        let calculated_inventory =
-            Self::get_calculated_inventory(&ingredients_quantity, &mut connection);
+        let calculated_inventory = data_loader.get_calculated_inventory(&ingredients_quantity);
 
         let current_sub_area = None;
         let clicked_map = None;
@@ -650,8 +639,9 @@ impl MainWindow {
                         }
                     }
 
-                    self.calculated_inventory =
-                        Self::get_calculated_inventory(&self.ingredients_quantity, &mut connection);
+                    self.calculated_inventory = self
+                        .data_loader
+                        .get_calculated_inventory(&self.ingredients_quantity);
 
                     // Update database
                     let pool = self.pool.clone();
@@ -795,10 +785,9 @@ impl MainWindow {
 
                 let pool = self.pool.clone();
 
-                self.calculated_inventory = Self::get_calculated_inventory(
-                    &self.ingredients_quantity,
-                    &mut pool.get().unwrap(),
-                );
+                self.calculated_inventory = self
+                    .data_loader
+                    .get_calculated_inventory(&self.ingredients_quantity);
 
                 let user_ingredient = UserIngredient {
                     quantity,
@@ -905,22 +894,6 @@ impl MainWindow {
         });
     }
 
-    fn get_calculated_inventory(inventory: &ItemList, connection: &mut PgConnection) -> ItemList {
-        let mut calculated_inventory = ItemList::new();
-        inventory.iter().for_each(|(ingredient, quantity)| {
-            calculated_inventory.add_item(ingredient, quantity);
-            if ingredient.has_recipe(connection) {
-                let (base_ingredients, steps) = ingredient.get_full_recipe(quantity, connection);
-                calculated_inventory.add_items(&base_ingredients);
-                steps.iter().for_each(|step_list| {
-                    calculated_inventory.add_items(step_list);
-                });
-            }
-        });
-
-        calculated_inventory
-    }
-
     fn zoom_in(&mut self, pointer_pos: Pos2) {
         if self.zoom_index > 0 {
             self.update_zoom(self.zoom_index - 1, pointer_pos);
@@ -954,7 +927,7 @@ impl MainWindow {
     }
 }
 
-impl eframe::App for MainWindow {
+impl<Loader: DataLoader> eframe::App for MainWindow<Loader> {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let span = trace_span!("update");
         let _guard = span.enter();

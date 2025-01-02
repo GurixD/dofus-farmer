@@ -8,11 +8,11 @@ use egui::{load::SizedTexture, Context, Vec2, Window};
 use egui_dock::{DockArea, DockState, NodeIndex, Style};
 use tracing::trace_span;
 
-use crate::database::models::{
+use crate::{data_loader::dofusdb::api_loader::ApiLoader, database::models::{
     item::{Item, ItemList},
     monster::Monster,
     sub_area::SubArea,
-};
+}};
 
 use super::{
     image::Image,
@@ -89,7 +89,7 @@ impl ItemsWindow {
     pub(crate) fn get_sized_texture(image: &Image) -> SizedTexture {
         SizedTexture {
             id: image.handle.id(),
-            size: MainWindow::ITEM_IMAGE_SIZE,
+            size: MainWindow::<ApiLoader>::ITEM_IMAGE_SIZE,
         }
     }
 }

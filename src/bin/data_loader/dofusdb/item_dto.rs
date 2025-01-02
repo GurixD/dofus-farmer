@@ -11,4 +11,6 @@ pub struct ItemDto {
     pub category: i16,
     #[serde(rename = "iconId")]
     pub icon: i32,
+    #[serde(rename = "hasRecipe")]
+    pub has_recipe: bool,
 }

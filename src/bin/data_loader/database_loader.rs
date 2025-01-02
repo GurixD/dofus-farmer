@@ -13,6 +13,7 @@ use crate::database::models::{
     user_ingredient::UserIngredient,
     user_item::UserItem,
 };
+use diesel::prelude::*;
 
 use super::data_loader::DataLoader;
 
@@ -23,6 +24,10 @@ pub struct DatabaseLoader {
 }
 
 impl DataLoader for DatabaseLoader {
+    fn new(pool: Pool<ConnectionManager<PgConnection>>, item_tx: Sender<(Item, i16)>) -> Self {
+        Self { pool, item_tx }
+    }
+
     fn load_all_sub_areas(
         &self,
     ) -> std::collections::HashMap<
@@ -80,5 +85,38 @@ impl DataLoader for DatabaseLoader {
                 .map(|(user_ingredient, item)| (item, user_ingredient.quantity))
                 .collect(),
         )
+    }
+
+    fn item_has_recipe(&self, item: &Item) -> bool {
+        use crate::database::schema::recipes::dsl::*;
+        use diesel::dsl::*;
+
+        let mut connection = self.pool.get().unwrap();
+
+        let count: i64 = recipes
+            .select(count(result_item_id))
+            .filter(result_item_id.eq(item.id))
+            .first(&mut connection)
+            .unwrap();
+
+        count > 0
+    }
+
+    fn get_calculated_inventory(&self, inventory: &ItemList) -> ItemList {
+        let mut connection = self.pool.get().unwrap();
+        let mut calculated_inventory = ItemList::new();
+        inventory.iter().for_each(|(ingredient, quantity)| {
+            calculated_inventory.add_item(ingredient, quantity);
+            if self.item_has_recipe(ingredient) {
+                let (base_ingredients, steps) =
+                    ingredient.get_full_recipe(quantity, &mut connection);
+                calculated_inventory.add_items(&base_ingredients);
+                steps.iter().for_each(|step_list| {
+                    calculated_inventory.add_items(step_list);
+                });
+            }
+        });
+
+        calculated_inventory
     }
 }
