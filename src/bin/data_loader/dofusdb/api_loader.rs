@@ -5,7 +5,9 @@ use diesel::{
     r2d2::{ConnectionManager, Pool},
     PgConnection,
 };
+use egui::{ColorImage, Context};
 use futures::executor::block_on;
+use image::{ImageFormat, ImageReader};
 use itertools::Itertools;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -23,6 +25,7 @@ use crate::{
         user_ingredient::UserIngredient,
         user_item::UserItem,
     },
+    gui::image::Image,
 };
 
 use super::{base_response::BaseResponse, dofusdb_cache::DofusDbCache, query_params::QueryParams};
@@ -37,6 +40,8 @@ impl ApiLoader {
     pub const BASE_URL: &str = "https://api.beta.dofusdb.fr";
     const MAP_POSITIONS_URL: &str = formatcp!("{}/map-positions", ApiLoader::BASE_URL);
     const ITEMS_URL: &str = formatcp!("{}/items", ApiLoader::BASE_URL);
+    const WORLD_MAPS_URL: &str = formatcp!("{}/img/worlds", ApiLoader::BASE_URL);
+    const DEFAULT_WORLD: u32 = 1;
     const LIMIT: u32 = 50;
 }
 
@@ -228,5 +233,45 @@ impl DataLoader for ApiLoader {
         });
 
         calculated_inventory
+    }
+
+    fn map_from_ui_and_index(
+        &self,
+        ctx: Context,
+        index: u16,
+        tx: Sender<(Image, u16, usize)>,
+        zoom: f32,
+        zoom_index: usize,
+    ) {
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let color_image = Self::load_image(client, zoom, index).await;
+            let handle = ctx.load_texture(index.to_string(), color_image, Default::default());
+            let image = Image::new(handle, true);
+            tx.send((image, index, zoom_index)).unwrap();
+            ctx.request_repaint();
+        });
+    }
+}
+
+impl ApiLoader {
+    pub async fn load_image(client: ClientWithMiddleware, zoom: f32, index: u16) -> ColorImage {
+        let response = client
+            .get(&format!(
+                "{}/{}/{}/{}.jpg",
+                Self::WORLD_MAPS_URL,
+                Self::DEFAULT_WORLD,
+                zoom,
+                index + 1
+            ))
+            .send()
+            .await
+            .unwrap();
+        let data = response.bytes().await.unwrap();
+        let image = image::load_from_memory_with_format(&data, ImageFormat::Jpeg).unwrap();
+        let size = [image.width() as _, image.height() as _];
+        let image_buffer = image.to_rgba8();
+        let pixels = image_buffer.as_flat_samples();
+        ColorImage::from_rgba_unmultiplied(size, pixels.as_slice())
     }
 }

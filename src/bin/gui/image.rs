@@ -33,13 +33,6 @@ impl Image {
         Image::new(handle, true)
     }
 
-    pub fn map_from_ui_and_index(ctx: &Context, index: u16, zoom: f32) -> Self {
-        // Images start at 1
-        let path = format!("images/worldmap/{}/{}.jpg", zoom, index + 1);
-        let path = Path::new(&path);
-        Self::from_path(ctx, &path)
-    }
-
     pub fn item_from_image_id(ctx: &Context, id: i32) -> Self {
         let path = format!("images/items/{id}.png");
         let path = Path::new(&path);

@@ -24,10 +24,6 @@ impl QueryParams {
             .push(value.to_string());
     }
 
-    pub fn remove_param(&mut self, key: &str) {
-        self.inner.remove(key).unwrap();
-    }
-
     pub fn to_query_string(&self) -> String {
         self.inner
             .iter()

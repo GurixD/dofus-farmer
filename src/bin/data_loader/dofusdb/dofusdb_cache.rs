@@ -1,4 +1,3 @@
-use cacache::Integrity;
 use futures::executor::block_on;
 use http::Extensions;
 use nanoserde::{DeBin, SerBin};
@@ -40,12 +39,10 @@ impl Middleware for DofusDbCache {
         next: Next<'_>,
     ) -> Result<Response> {
         let key = format!("{}{}", self.version, req.url().as_str());
-        println!("key: {key}");
         let data = cacache::read(&self.directory, &key).await;
         match data {
             Ok(data) => {
                 let my_response: MyResponse = DeBin::deserialize_bin(&data[..]).unwrap();
-                println!("cache hit {key}");
                 Ok(http::Response::builder()
                     .status(200)
                     .url(req.url().clone())
@@ -53,13 +50,11 @@ impl Middleware for DofusDbCache {
                     .unwrap()
                     .into())
             }
-            Err(err) => {
+            Err(_) => {
                 let url = req.url().clone();
-                println!("cache miss, {err}");
                 let response = next.run(req, extensions).await?;
                 let status = response.status();
                 if status == 200 {
-                    println!("saving to cache");
                     let body = response.bytes().await?;
                     let data = MyResponse { body: body.into() };
                     cacache::write(&self.directory, &key, data.serialize_bin())

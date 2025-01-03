@@ -4,17 +4,29 @@ use diesel::{
     r2d2::{ConnectionManager, Pool},
     PgConnection,
 };
+use egui::Context;
 
-use crate::database::models::{
-    item::{Item, ItemList},
-    map::Map,
-    sub_area::SubArea,
+use crate::{
+    database::models::{
+        item::{Item, ItemList},
+        map::Map,
+        sub_area::SubArea,
+    },
+    gui::image::Image,
 };
 
-pub trait DataLoader {
+pub trait DataLoader: Send {
     fn new(pool: Pool<ConnectionManager<PgConnection>>, item_tx: Sender<(Item, i16)>) -> Self;
     fn load_all_sub_areas(&self) -> HashMap<SubArea, Vec<Map>>;
     fn load_initial_ingredients_quantity(&self) -> ItemList;
     fn item_has_recipe(&self, item: &Item) -> bool;
     fn get_calculated_inventory(&self, inventory: &ItemList) -> ItemList;
+    fn map_from_ui_and_index(
+        &self,
+        ctx: Context,
+        index: u16,
+        tx: Sender<(Image, u16, usize)>,
+        zoom: f32,
+        zoom_index: usize,
+    );
 }

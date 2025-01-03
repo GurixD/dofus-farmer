@@ -4,11 +4,13 @@
 
 mod data_loader;
 mod database;
-mod windows;
+pub mod gui;
 
 use crate::database::connection::establish_pooled_connection;
+use data_loader::database_loader::DatabaseLoader;
 use data_loader::dofusdb::api_loader::ApiLoader;
 use eframe::NativeOptions;
+use gui::main_window::MainWindow;
 use tokio::runtime::Runtime;
 use tracing::level_filters::LevelFilter;
 use tracing::trace_span;
@@ -16,7 +18,6 @@ use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::Registry;
-use windows::main_window::MainWindow;
 
 fn main() {
     let stdout_log = tracing_subscriber::fmt::layer()
@@ -36,6 +37,8 @@ type ChosenLoader = ApiLoader;
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
 fn start() -> eframe::Result<()> {
+    use std::{panic, process};
+
     use egui::{FontId, Style, Visuals};
     use tracing::{event, Level};
 
@@ -44,6 +47,15 @@ fn start() -> eframe::Result<()> {
 
     let rt = Runtime::new().expect("Unable to create Runtime");
     let _enter = rt.enter();
+
+    // https://stackoverflow.com/a/36031130 
+    // take_hook() returns the default hook in case when a custom one is not set
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        // invoke the default handler and exit the process
+        orig_hook(panic_info);
+        process::exit(1);
+    }));
 
     event!(Level::TRACE, "establishing  pooled connection");
     let pool = establish_pooled_connection();

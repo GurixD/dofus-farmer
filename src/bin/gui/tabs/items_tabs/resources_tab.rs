@@ -9,7 +9,7 @@ use crate::{
         item::{Item, ItemList},
         sub_area::SubArea,
     },
-    windows::{
+    gui::{
         image::Image,
         items_window::ItemsWindow,
         main_window::{AsyncStatus, ItemsRelations},

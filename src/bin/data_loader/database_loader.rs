@@ -1,17 +1,21 @@
-use std::{collections::HashMap, sync::mpsc::Sender};
+use std::{collections::HashMap, path::Path, sync::mpsc::Sender};
 
 use diesel::{
     r2d2::{ConnectionManager, Pool},
     PgConnection,
 };
+use egui::Context;
 use lombok::AllArgsConstructor;
 
-use crate::database::models::{
-    item::{Item, ItemList},
-    map::Map,
-    sub_area::SubArea,
-    user_ingredient::UserIngredient,
-    user_item::UserItem,
+use crate::{
+    database::models::{
+        item::{Item, ItemList},
+        map::Map,
+        sub_area::SubArea,
+        user_ingredient::UserIngredient,
+        user_item::UserItem,
+    },
+    gui::image::Image,
 };
 use diesel::prelude::*;
 
@@ -118,5 +122,23 @@ impl DataLoader for DatabaseLoader {
         });
 
         calculated_inventory
+    }
+
+    fn map_from_ui_and_index(
+        &self,
+        ctx: Context,
+        index: u16,
+        tx: Sender<(Image, u16, usize)>,
+        zoom: f32,
+        zoom_index: usize,
+    ) {
+        tokio::spawn(async move {
+            // Images start at 1
+            let path = format!("images/worldmap/{}/{}.jpg", zoom, index + 1);
+            let path = Path::new(&path);
+            let image = Image::from_path(&ctx, &path);
+            tx.send((image, index, zoom_index)).unwrap();
+            ctx.request_repaint();
+        });
     }
 }

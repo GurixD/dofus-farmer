@@ -504,18 +504,15 @@ impl<Loader: DataLoader> MainWindow<Loader> {
         });
     }
 
-    fn load_map_image(&mut self, ctx: Context, index: u16) {
+    fn load_map_image(&self, ctx: Context, index: u16) {
         let span = trace_span!("load_map_image");
         let _guard = span.enter();
 
         let tx = self.map_tx.clone();
         let zoom_index = self.zoom_index;
         let zoom = Self::ZOOMS[zoom_index];
-        tokio::spawn(async move {
-            let image = Image::map_from_ui_and_index(&ctx, index, zoom);
-            tx.send((image, index, zoom_index)).unwrap();
-            ctx.request_repaint();
-        });
+        self.data_loader
+            .map_from_ui_and_index(ctx, index, tx, zoom, zoom_index);
     }
 
     fn load_item_image(tx: Sender<(Item, Image)>, ctx: Context, item: Item) {

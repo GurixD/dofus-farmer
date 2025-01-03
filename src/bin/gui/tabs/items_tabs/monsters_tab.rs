@@ -8,7 +8,7 @@ use crate::{
         monster::Monster,
         sub_area::SubArea,
     },
-    windows::{
+    gui::{
         image::Image,
         items_window::ItemsWindow,
         main_window::{AsyncStatus, ItemsRelations},

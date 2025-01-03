@@ -15,7 +15,7 @@ use tracing::trace_span;
 
 use crate::{
     database::models::item::Item,
-    windows::{image::Image, items_window::ItemsWindow, main_window::AsyncStatus},
+    gui::{image::Image, items_window::ItemsWindow, main_window::AsyncStatus},
 };
 
 pub struct SearchItemTab {

@@ -5,7 +5,7 @@ use egui_modal::Modal;
 
 use crate::{
     database::models::{item::Item, sub_area::SubArea},
-    windows::{
+    gui::{
         image::Image,
         items_window::ItemsWindow,
         main_window::{AsyncStatus, ItemsRelations},
