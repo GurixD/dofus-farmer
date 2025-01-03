@@ -515,17 +515,7 @@ impl<Loader: DataLoader> MainWindow<Loader> {
             .map_from_ui_and_index(ctx, index, tx, zoom, zoom_index);
     }
 
-    fn load_item_image(tx: Sender<(Item, Image)>, ctx: Context, item: Item) {
-        let span = trace_span!("load_item_image");
-        let _guard = span.enter();
-
-        tokio::spawn(async move {
-            let image = Image::item_from_image_id(&ctx, item.image_id);
-            event!(Level::INFO, "Loaded item image {}", item.name);
-            tx.send((item, image)).unwrap();
-            ctx.request_repaint();
-        });
-    }
+    // up ok
 
     fn load_monster_image(tx: Sender<(Monster, Image)>, ctx: Context, monster: Monster) {
         let span = trace_span!("load_item_image");
@@ -560,7 +550,11 @@ impl<Loader: DataLoader> MainWindow<Loader> {
                 *item_value
             } else {
                 self.items_images.entry(item.clone()).or_insert_with(|| {
-                    Self::load_item_image(self.item_image_tx.clone(), ctx.clone(), item.clone());
+                    self.data_loader.item_from_id(
+                        self.item_image_tx.clone(),
+                        ctx.clone(),
+                        item.clone(),
+                    );
                     AsyncStatus::Loading
                 });
 
@@ -710,7 +704,7 @@ impl<Loader: DataLoader> MainWindow<Loader> {
                         .into_iter()
                         .map(|(ingredient, (quantity, monsters_sub_area))| {
                             if self.items_images.get_key_value(&ingredient).is_none() {
-                                Self::load_item_image(
+                                self.data_loader.item_from_id(
                                     self.item_image_tx.clone(),
                                     ctx.clone(),
                                     ingredient.clone(),
@@ -747,7 +741,7 @@ impl<Loader: DataLoader> MainWindow<Loader> {
                     ingredient_steps.iter().for_each(|step_list| {
                         step_list.iter().for_each(|(step_item, _)| {
                             if self.items_images.get_key_value(step_item).is_none() {
-                                Self::load_item_image(
+                                self.data_loader.item_from_id(
                                     self.item_image_tx.clone(),
                                     ctx.clone(),
                                     step_item.clone(),

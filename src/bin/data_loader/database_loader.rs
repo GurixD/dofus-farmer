@@ -141,4 +141,12 @@ impl DataLoader for DatabaseLoader {
             ctx.request_repaint();
         });
     }
+
+    fn item_from_id(&self, tx: Sender<(Item, Image)>, ctx: Context, item: Item) {
+        tokio::spawn(async move {
+            let image = Image::item_from_image_id(&ctx, item.image_id);
+            tx.send((item, image)).unwrap();
+            ctx.request_repaint();
+        });
+    }
 }

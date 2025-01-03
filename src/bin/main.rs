@@ -48,7 +48,7 @@ fn start() -> eframe::Result<()> {
     let rt = Runtime::new().expect("Unable to create Runtime");
     let _enter = rt.enter();
 
-    // https://stackoverflow.com/a/36031130 
+    // https://stackoverflow.com/a/36031130
     // take_hook() returns the default hook in case when a custom one is not set
     let orig_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {

@@ -41,6 +41,7 @@ impl ApiLoader {
     const MAP_POSITIONS_URL: &str = formatcp!("{}/map-positions", ApiLoader::BASE_URL);
     const ITEMS_URL: &str = formatcp!("{}/items", ApiLoader::BASE_URL);
     const WORLD_MAPS_URL: &str = formatcp!("{}/img/worlds", ApiLoader::BASE_URL);
+    const ITEMS_IMG_URL: &str = formatcp!("{}/img/items", ApiLoader::BASE_URL);
     const DEFAULT_WORLD: u32 = 1;
     const LIMIT: u32 = 50;
 }
@@ -245,33 +246,47 @@ impl DataLoader for ApiLoader {
     ) {
         let client = self.client.clone();
         tokio::spawn(async move {
-            let color_image = Self::load_image(client, zoom, index).await;
+            let color_image = Self::load_map_image(client, zoom, index).await;
             let handle = ctx.load_texture(index.to_string(), color_image, Default::default());
             let image = Image::new(handle, true);
             tx.send((image, index, zoom_index)).unwrap();
             ctx.request_repaint();
         });
     }
+
+    fn item_from_id(&self, tx: Sender<(Item, Image)>, ctx: Context, item: Item) {
+        tokio::spawn(async move {
+            let image = Image::item_from_image_id(&ctx, item.image_id);
+            tx.send((item, image)).unwrap();
+            ctx.request_repaint();
+        });
+    }
 }
 
 impl ApiLoader {
-    pub async fn load_image(client: ClientWithMiddleware, zoom: f32, index: u16) -> ColorImage {
-        let response = client
-            .get(&format!(
-                "{}/{}/{}/{}.jpg",
-                Self::WORLD_MAPS_URL,
-                Self::DEFAULT_WORLD,
-                zoom,
-                index + 1
-            ))
-            .send()
-            .await
-            .unwrap();
+    pub async fn load_image(url: &str, client: &ClientWithMiddleware) -> ColorImage {
+        let response = client.get(url).send().await.unwrap();
         let data = response.bytes().await.unwrap();
         let image = image::load_from_memory_with_format(&data, ImageFormat::Jpeg).unwrap();
         let size = [image.width() as _, image.height() as _];
         let image_buffer = image.to_rgba8();
         let pixels = image_buffer.as_flat_samples();
         ColorImage::from_rgba_unmultiplied(size, pixels.as_slice())
+    }
+
+    pub async fn load_map_image(client: ClientWithMiddleware, zoom: f32, index: u16) -> ColorImage {
+        let url = &format!(
+            "{}/{}/{}/{}.jpg",
+            Self::WORLD_MAPS_URL,
+            Self::DEFAULT_WORLD,
+            zoom,
+            index + 1
+        );
+        Self::load_image(url, &client).await
+    }
+
+    pub async fn load_item_image(client: ClientWithMiddleware, id: i32) -> ColorImage {
+        let url = &format!("{}/{}.jpg", Self::ITEMS_IMG_URL, id);
+        Self::load_image(url, &client).await
     }
 }

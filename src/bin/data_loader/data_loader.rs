@@ -29,4 +29,5 @@ pub trait DataLoader: Send {
         zoom: f32,
         zoom_index: usize,
     );
+    fn item_from_id(&self, tx: Sender<(Item, Image)>, ctx: Context, item: Item);
 }
