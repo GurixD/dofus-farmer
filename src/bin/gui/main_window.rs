@@ -517,17 +517,6 @@ impl<Loader: DataLoader> MainWindow<Loader> {
 
     // up ok
 
-    fn load_monster_image(tx: Sender<(Monster, Image)>, ctx: Context, monster: Monster) {
-        let span = trace_span!("load_item_image");
-        let _guard = span.enter();
-
-        tokio::spawn(async move {
-            let image = Image::monster_from_id(&ctx, monster.id);
-            tx.send((monster, image)).unwrap();
-            ctx.request_repaint();
-        });
-    }
-
     fn check_for_new_map_images(&mut self) {
         let span = trace_span!("check_for_new_images");
         let _guard = span.enter();
@@ -721,11 +710,12 @@ impl<Loader: DataLoader> MainWindow<Loader> {
                                     {
                                         monster.clone()
                                     } else {
-                                        Self::load_monster_image(
+                                        self.data_loader.load_monster_image(
                                             self.monster_image_tx.clone(),
                                             ctx.clone(),
                                             monster.clone(),
                                         );
+
                                         self.monsters_images
                                             .insert(monster.clone(), AsyncStatus::Loading);
                                         monster

@@ -10,6 +10,7 @@ use crate::{
     database::models::{
         item::{Item, ItemList},
         map::Map,
+        monster::Monster,
         sub_area::SubArea,
     },
     gui::image::Image,
@@ -30,4 +31,5 @@ pub trait DataLoader: Send {
         zoom_index: usize,
     );
     fn item_from_id(&self, tx: Sender<(Item, Image)>, ctx: Context, item: Item);
+    fn load_monster_image(&self, tx: Sender<(Monster, Image)>, ctx: Context, monster: Monster);
 }

@@ -9,11 +9,7 @@ use lombok::AllArgsConstructor;
 
 use crate::{
     database::models::{
-        item::{Item, ItemList},
-        map::Map,
-        sub_area::SubArea,
-        user_ingredient::UserIngredient,
-        user_item::UserItem,
+        item::{Item, ItemList}, map::Map, monster::Monster, sub_area::SubArea, user_ingredient::UserIngredient, user_item::UserItem
     },
     gui::image::Image,
 };
@@ -146,6 +142,14 @@ impl DataLoader for DatabaseLoader {
         tokio::spawn(async move {
             let image = Image::item_from_image_id(&ctx, item.image_id);
             tx.send((item, image)).unwrap();
+            ctx.request_repaint();
+        });
+    }
+
+    fn load_monster_image(&self, tx: Sender<(Monster, Image)>, ctx: Context, monster: Monster) {
+        tokio::spawn(async move {
+            let image = Image::monster_from_id(&ctx, monster.id);
+            tx.send((monster, image)).unwrap();
             ctx.request_repaint();
         });
     }

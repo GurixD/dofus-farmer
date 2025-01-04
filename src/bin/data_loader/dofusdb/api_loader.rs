@@ -7,20 +7,19 @@ use diesel::{
 };
 use egui::{ColorImage, Context};
 use futures::executor::block_on;
-use image::{ImageFormat, ImageReader};
+use image::ImageFormat;
 use itertools::Itertools;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use serde::de::DeserializeOwned;
 use serde_json::{from_str, from_value};
 
 use crate::{
-    data_loader::{
-        data_loader::DataLoader,
-        dofusdb::{item_dto::ItemDto, map_position_dto::MapPositionDto},
-    },
+    data_loader::{data_loader::DataLoader, dofusdb::dto::item_dto::ItemDto},
     database::models::{
         item::{Item, ItemList},
         map::Map,
+        monster::Monster,
         sub_area::SubArea,
         user_ingredient::UserIngredient,
         user_item::UserItem,
@@ -28,7 +27,12 @@ use crate::{
     gui::image::Image,
 };
 
-use super::{base_response::BaseResponse, dofusdb_cache::DofusDbCache, query_params::QueryParams};
+use super::{
+    base_response::BaseResponse,
+    dofusdb_cache::DofusDbCache,
+    dto::{map_position_dto::MapPositionDto, monster_dto::MonsterDto},
+    query_params::QueryParams,
+};
 
 pub struct ApiLoader {
     client: ClientWithMiddleware,
@@ -38,10 +42,13 @@ pub struct ApiLoader {
 
 impl ApiLoader {
     pub const BASE_URL: &str = "https://api.beta.dofusdb.fr";
+    pub const BASE_IMG_URL: &str = formatcp!("{}/img", ApiLoader::BASE_URL);
     const MAP_POSITIONS_URL: &str = formatcp!("{}/map-positions", ApiLoader::BASE_URL);
     const ITEMS_URL: &str = formatcp!("{}/items", ApiLoader::BASE_URL);
-    const WORLD_MAPS_URL: &str = formatcp!("{}/img/worlds", ApiLoader::BASE_URL);
-    const ITEMS_IMG_URL: &str = formatcp!("{}/img/items", ApiLoader::BASE_URL);
+    const MONSTERS_URL: &str = formatcp!("{}/monsters", ApiLoader::BASE_URL);
+    const WORLD_MAPS_URL: &str = formatcp!("{}/worlds", ApiLoader::BASE_IMG_URL);
+    const ITEMS_IMG_URL: &str = formatcp!("{}/items", ApiLoader::BASE_IMG_URL);
+    const MONSTERS_IMG_URL: &str = formatcp!("{}/monsters", ApiLoader::BASE_IMG_URL);
     const DEFAULT_WORLD: u32 = 1;
     const LIMIT: u32 = 50;
 }
@@ -140,10 +147,6 @@ impl DataLoader for ApiLoader {
 
         let mut query_params = QueryParams::new();
         query_params.set_param("$limit", "1");
-        // query_params.add_param("$select[]", "id");
-        // query_params.add_param("$select[]", "name");
-        // query_params.add_param("$select[]", "type");
-        // query_params.add_param("$select[]", "iconId");
 
         let user_items = user_items::table
             .load::<UserItem>(&mut connection)
@@ -162,7 +165,7 @@ impl DataLoader for ApiLoader {
                         .unwrap();
                     (
                         user_item,
-                        Item::new(item.id, item.name, item.category, item.icon),
+                        Item::new(item.id, item.name, item.category, item.icon_id),
                     )
                 }
             })
@@ -192,7 +195,7 @@ impl DataLoader for ApiLoader {
                             from_str::<BaseResponse>(&response.text().await.unwrap()).unwrap();
                         let item = from_value::<ItemDto>(json.data).unwrap();
                         (
-                            Item::new(item.id, item.name, item.category, item.icon),
+                            Item::new(item.id, item.name, item.category, item.icon_id),
                             user_ingredient.quantity,
                         )
                     }
@@ -203,19 +206,7 @@ impl DataLoader for ApiLoader {
     }
     #[tokio::main]
     async fn item_has_recipe(&self, item: &Item) -> bool {
-        let mut query_params = QueryParams::new();
-        query_params.set_param("$limit", "1");
-        query_params.set_param("id", &item.id.to_string());
-
-        let url = Self::ITEMS_URL.to_string() + "?" + &query_params.to_query_string();
-        let response = self.client.get(url).send().await.unwrap();
-        let json = from_str::<BaseResponse>(&response.text().await.unwrap()).unwrap();
-        let item = from_value::<Vec<ItemDto>>(json.data)
-            .unwrap()
-            .pop()
-            .unwrap();
-
-        item.has_recipe
+        Self::load_item(&self.client, item.id).await.has_recipe
     }
 
     fn get_calculated_inventory(&self, inventory: &ItemList) -> ItemList {
@@ -255,19 +246,56 @@ impl DataLoader for ApiLoader {
     }
 
     fn item_from_id(&self, tx: Sender<(Item, Image)>, ctx: Context, item: Item) {
+        let client = self.client.clone();
         tokio::spawn(async move {
-            let image = Image::item_from_image_id(&ctx, item.image_id);
+            let color_image = Self::load_item_image(client, item.id).await;
+            let handle = ctx.load_texture(item.name.clone(), color_image, Default::default());
+            let image = Image::new(handle, true);
             tx.send((item, image)).unwrap();
+            ctx.request_repaint();
+        });
+    }
+
+    fn load_monster_image(&self, tx: Sender<(Monster, Image)>, ctx: Context, monster: Monster) {
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let color_image = Self::load_monster_image(client, monster.id).await;
+            let handle = ctx.load_texture(monster.name.clone(), color_image, Default::default());
+            let image = Image::new(handle, true);
+            tx.send((monster, image)).unwrap();
             ctx.request_repaint();
         });
     }
 }
 
 impl ApiLoader {
+    pub async fn load_single<T: DeserializeOwned>(
+        client: &ClientWithMiddleware,
+        url: &str,
+        id: i32,
+    ) -> T {
+        let mut query_params = QueryParams::new();
+        query_params.set_param("$limit", "1");
+        query_params.set_param("id", &id.to_string());
+
+        let url = url.to_string() + "?" + &query_params.to_query_string();
+        let response = client.get(url).send().await.unwrap();
+        let json = from_str::<BaseResponse>(&response.text().await.unwrap()).unwrap();
+        from_value::<Vec<T>>(json.data).unwrap().pop().unwrap()
+    }
+
+    pub async fn load_item(client: &ClientWithMiddleware, id: i32) -> ItemDto {
+        Self::load_single(&client, Self::ITEMS_URL, id).await
+    }
+
+    pub async fn load_monster(client: &ClientWithMiddleware, id: i32) -> MonsterDto {
+        Self::load_single(&client, Self::MONSTERS_URL, id).await
+    }
+
     pub async fn load_image(url: &str, client: &ClientWithMiddleware) -> ColorImage {
         let response = client.get(url).send().await.unwrap();
         let data = response.bytes().await.unwrap();
-        let image = image::load_from_memory_with_format(&data, ImageFormat::Jpeg).unwrap();
+        let image = image::load_from_memory(&data).unwrap();
         let size = [image.width() as _, image.height() as _];
         let image_buffer = image.to_rgba8();
         let pixels = image_buffer.as_flat_samples();
@@ -286,7 +314,14 @@ impl ApiLoader {
     }
 
     pub async fn load_item_image(client: ClientWithMiddleware, id: i32) -> ColorImage {
-        let url = &format!("{}/{}.jpg", Self::ITEMS_IMG_URL, id);
+        let item = Self::load_item(&client, id).await;
+        let url = &format!("{}/{}.png", Self::ITEMS_IMG_URL, item.icon_id);
+        Self::load_image(url, &client).await
+    }
+
+    pub async fn load_monster_image(client: ClientWithMiddleware, id: i32) -> ColorImage {
+        let monster = Self::load_monster(&client, id).await;
+        let url = &format!("{}/{}.png", Self::MONSTERS_IMG_URL, monster.gfx_id);
         Self::load_image(url, &client).await
     }
 }

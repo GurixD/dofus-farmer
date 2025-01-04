@@ -10,7 +10,7 @@ pub struct ItemDto {
     #[flat_path("type.categoryId")]
     pub category: i16,
     #[serde(rename = "iconId")]
-    pub icon: i32,
+    pub icon_id: i32,
     #[serde(rename = "hasRecipe")]
     pub has_recipe: bool,
 }

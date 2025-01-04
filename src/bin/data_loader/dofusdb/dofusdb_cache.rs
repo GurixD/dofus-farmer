@@ -69,7 +69,7 @@ impl Middleware for DofusDbCache {
                 }
 
                 Err(Error::Middleware(anyhow::Error::msg(format!(
-                    "wrong status code {status}",
+                    "wrong status code {status} for {url}",
                 ))))
             }
         }
