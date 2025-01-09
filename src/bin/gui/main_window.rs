@@ -14,16 +14,14 @@ use egui::{
     Vec2,
 };
 use lombok::AllArgsConstructor;
-use tracing::{event, trace_span, warn, Level};
+use tracing::{trace_span, warn};
 
 use crate::{
     data_loader::data_loader::DataLoader,
     database::models::{
-        drop::Drop,
         item::{Item, ItemList},
         map::Map,
         monster::Monster,
-        monster_sub_area::MonsterSubArea,
         sub_area::SubArea,
         user_ingredient::UserIngredient,
         user_item::UserItem,
@@ -63,7 +61,7 @@ pub type ItemsRelations = BTreeMap<
     ),
 >;
 
-type Ingredients = (
+pub type Ingredients = (
     Item,
     i16,
     HashMap<Item, (i16, HashMap<Monster, HashSet<SubArea>>)>,
@@ -515,8 +513,6 @@ impl<Loader: DataLoader> MainWindow<Loader> {
             .map_from_ui_and_index(ctx, index, tx, zoom, zoom_index);
     }
 
-    // up ok
-
     fn check_for_new_map_images(&mut self) {
         let span = trace_span!("check_for_new_images");
         let _guard = span.enter();
@@ -530,6 +526,8 @@ impl<Loader: DataLoader> MainWindow<Loader> {
                 }
             });
     }
+
+    // up ok
 
     // New item to craft / to have
     fn check_for_new_items(&mut self, ctx: &Context) {
@@ -549,11 +547,10 @@ impl<Loader: DataLoader> MainWindow<Loader> {
 
                 self.items
                     .insert(item.clone(), (quantity as _, AsyncStatus::Loading));
-                Self::load_recipe_of_item(
+                self.data_loader.load_recipe_of_item(
                     self.item_ingredients_tx.clone(),
-                    self.pool.clone(),
                     item.clone(),
-                    quantity as _,
+                    quantity,
                 );
 
                 quantity
@@ -816,63 +813,6 @@ impl<Loader: DataLoader> MainWindow<Loader> {
                     *loading_image = AsyncStatus::Ready(image);
                 }
             });
-    }
-
-    fn load_recipe_of_item(
-        tx: Sender<Ingredients>,
-        pool: Pool<ConnectionManager<PgConnection>>,
-        item: Item,
-        quantity: i16,
-    ) {
-        tokio::spawn(async move {
-            use crate::database::schema::*;
-            use diesel::prelude::*;
-
-            let mut connection = pool.get().unwrap();
-
-            let mut result_hash_map = HashMap::new();
-
-            let (base_ingredients, ingredients_steps) = item.get_full_recipe(&1, &mut connection);
-
-            base_ingredients.iter().for_each(|(ingredient, quantity)| {
-                let result: Vec<(SubArea, MonsterSubArea, Monster, Drop, Item)> = sub_areas::table
-                    .inner_join(
-                        monsters_sub_areas::table
-                            .on(sub_areas::id.eq(monsters_sub_areas::sub_area_id)),
-                    )
-                    .inner_join(monsters::table.on(monsters_sub_areas::monster_id.eq(monsters::id)))
-                    .inner_join(drops::table.on(monsters::id.eq(drops::monster_id)))
-                    .inner_join(items::table.on(drops::item_id.eq(items::id)))
-                    .filter(items::id.eq(ingredient.id))
-                    .load(&mut connection)
-                    .unwrap();
-
-                result_hash_map.insert(ingredient.clone(), (*quantity, Default::default()));
-                let mut sub_areas_for_monsters: HashMap<Monster, HashSet<SubArea>> = HashMap::new();
-
-                result.into_iter().for_each(|(sub_area, _, monster, _, _)| {
-                    sub_areas_for_monsters
-                        .entry(monster)
-                        .and_modify(|sub_areas| {
-                            sub_areas.insert(sub_area.clone());
-                        })
-                        .or_insert_with(|| {
-                            let mut sub_areas = HashSet::new();
-                            sub_areas.insert(sub_area);
-                            sub_areas
-                        });
-                });
-
-                result_hash_map
-                    .entry((*ingredient).clone())
-                    .and_modify(|(_, monsters)| {
-                        *monsters = sub_areas_for_monsters;
-                    });
-            });
-
-            tx.send((item, quantity, result_hash_map, ingredients_steps))
-                .unwrap();
-        });
     }
 
     fn zoom_in(&mut self, pointer_pos: Pos2) {

@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path, sync::mpsc::Sender};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::mpsc::Sender,
+};
 
 use diesel::{
     r2d2::{ConnectionManager, Pool},
@@ -9,9 +13,16 @@ use lombok::AllArgsConstructor;
 
 use crate::{
     database::models::{
-        item::{Item, ItemList}, map::Map, monster::Monster, sub_area::SubArea, user_ingredient::UserIngredient, user_item::UserItem
+        drop::Drop,
+        item::{Item, ItemList},
+        map::Map,
+        monster::Monster,
+        monster_sub_area::MonsterSubArea,
+        sub_area::SubArea,
+        user_ingredient::UserIngredient,
+        user_item::UserItem,
     },
-    gui::image::Image,
+    gui::{image::Image, main_window::Ingredients},
 };
 use diesel::prelude::*;
 
@@ -103,13 +114,15 @@ impl DataLoader for DatabaseLoader {
     }
 
     fn get_calculated_inventory(&self, inventory: &ItemList) -> ItemList {
-        let mut connection = self.pool.get().unwrap();
         let mut calculated_inventory = ItemList::new();
         inventory.iter().for_each(|(ingredient, quantity)| {
             calculated_inventory.add_item(ingredient, quantity);
             if self.item_has_recipe(ingredient) {
-                let (base_ingredients, steps) =
-                    ingredient.get_full_recipe(quantity, &mut connection);
+                let (base_ingredients, steps) = Self::item_get_full_recipe(
+                    self.pool.clone(),
+                    ingredient.clone(),
+                    quantity.clone(),
+                );
                 calculated_inventory.add_items(&base_ingredients);
                 steps.iter().for_each(|step_list| {
                     calculated_inventory.add_items(step_list);
@@ -152,5 +165,112 @@ impl DataLoader for DatabaseLoader {
             tx.send((monster, image)).unwrap();
             ctx.request_repaint();
         });
+    }
+
+    fn load_recipe_of_item(&self, tx: Sender<Ingredients>, item: Item, quantity: i16) {
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            use crate::database::schema::*;
+            use diesel::prelude::*;
+
+            let mut connection = pool.get().unwrap();
+
+            let mut result_hash_map = HashMap::new();
+
+            let (base_ingredients, ingredients_steps) =
+                Self::item_get_full_recipe(pool, item.clone(), 1);
+
+            base_ingredients.iter().for_each(|(ingredient, quantity)| {
+                let result: Vec<(SubArea, MonsterSubArea, Monster, Drop, Item)> = sub_areas::table
+                    .inner_join(
+                        monsters_sub_areas::table
+                            .on(sub_areas::id.eq(monsters_sub_areas::sub_area_id)),
+                    )
+                    .inner_join(monsters::table.on(monsters_sub_areas::monster_id.eq(monsters::id)))
+                    .inner_join(drops::table.on(monsters::id.eq(drops::monster_id)))
+                    .inner_join(items::table.on(drops::item_id.eq(items::id)))
+                    .filter(items::id.eq(ingredient.id))
+                    .load(&mut connection)
+                    .unwrap();
+
+                result_hash_map.insert(ingredient.clone(), (*quantity, Default::default()));
+                let mut sub_areas_for_monsters: HashMap<Monster, HashSet<SubArea>> = HashMap::new();
+
+                result.into_iter().for_each(|(sub_area, _, monster, _, _)| {
+                    sub_areas_for_monsters
+                        .entry(monster)
+                        .and_modify(|sub_areas| {
+                            sub_areas.insert(sub_area.clone());
+                        })
+                        .or_insert_with(|| {
+                            let mut sub_areas = HashSet::new();
+                            sub_areas.insert(sub_area);
+                            sub_areas
+                        });
+                });
+
+                result_hash_map
+                    .entry((*ingredient).clone())
+                    .and_modify(|(_, monsters)| {
+                        *monsters = sub_areas_for_monsters;
+                    });
+            });
+
+            tx.send((item, quantity, result_hash_map, ingredients_steps))
+                .unwrap();
+        });
+    }
+}
+
+impl DatabaseLoader {
+    fn item_get_full_recipe(
+        pool: Pool<ConnectionManager<PgConnection>>,
+        item: Item,
+        quantity: i16,
+    ) -> (ItemList, Vec<ItemList>) {
+        // used in loop to know which item we still need the recipe of
+        let mut items_to_make = ItemList::new();
+        items_to_make.add_item(&item, &quantity);
+
+        // The last materials of the items
+        let mut base_ingredients = ItemList::new();
+
+        // All the steps to create the item
+        let mut ingredients_steps: Vec<ItemList> = Vec::new();
+
+        // Temporary to set items to make
+        let mut next_items_to_make = ItemList::new();
+
+        let mut connection = pool.get().unwrap();
+
+        while !items_to_make.is_empty() {
+            ingredients_steps.push(ItemList::new());
+            items_to_make.iter().for_each(|(item, quantity)| {
+                if item.has_recipe(&mut connection) {
+                    ingredients_steps
+                        .last_mut()
+                        .unwrap()
+                        .add_item(item, quantity);
+
+                    let next = &item.get_recipe(quantity, &mut connection);
+                    next_items_to_make.add_items(next);
+                } else {
+                    base_ingredients.add_item(item, quantity);
+                }
+            });
+
+            items_to_make.clear();
+            items_to_make.add_items(&next_items_to_make);
+            next_items_to_make.clear();
+        }
+
+        // First is wanted item and last is empty
+        ingredients_steps.remove(0);
+        ingredients_steps.pop();
+
+        // put first the closest to base ingredients and last closest to final item
+        ingredients_steps.reverse();
+
+        (base_ingredients, ingredients_steps)
     }
 }

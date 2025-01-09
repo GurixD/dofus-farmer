@@ -13,7 +13,7 @@ use crate::{
         monster::Monster,
         sub_area::SubArea,
     },
-    gui::image::Image,
+    gui::{image::Image, main_window::Ingredients},
 };
 
 pub trait DataLoader: Send {
@@ -32,4 +32,5 @@ pub trait DataLoader: Send {
     );
     fn item_from_id(&self, tx: Sender<(Item, Image)>, ctx: Context, item: Item);
     fn load_monster_image(&self, tx: Sender<(Monster, Image)>, ctx: Context, monster: Monster);
+    fn load_recipe_of_item(&self, tx: Sender<Ingredients>, item: Item, quantity: i16);
 }

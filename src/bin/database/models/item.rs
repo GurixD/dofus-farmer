@@ -88,55 +88,6 @@ impl Item {
 
         items
     }
-
-    pub fn get_full_recipe(
-        &self,
-        quantity: &i16,
-        connection: &mut PgConnection,
-    ) -> (ItemList, Vec<ItemList>) {
-        // used in loop to know which item we still need the recipe of
-        let mut items_to_make = ItemList::new();
-        items_to_make.add_item(self, quantity);
-
-        // The last materials of the items
-        let mut base_ingredients = ItemList::new();
-
-        // All the steps to create the item
-        let mut ingredients_steps: Vec<ItemList> = Vec::new();
-
-        // Temporary to set items to make
-        let mut next_items_to_make = ItemList::new();
-
-        while !items_to_make.is_empty() {
-            ingredients_steps.push(ItemList::new());
-            items_to_make.iter().for_each(|(item, quantity)| {
-                if item.has_recipe(connection) {
-                    ingredients_steps
-                        .last_mut()
-                        .unwrap()
-                        .add_item(item, quantity);
-
-                    let next = &item.get_recipe(quantity, connection);
-                    next_items_to_make.add_items(next);
-                } else {
-                    base_ingredients.add_item(item, quantity);
-                }
-            });
-
-            items_to_make.clear();
-            items_to_make.add_items(&next_items_to_make);
-            next_items_to_make.clear();
-        }
-
-        // First is wanted item and last is empty
-        ingredients_steps.remove(0);
-        ingredients_steps.pop();
-
-        // put first the closest to base ingredients and last closest to final item
-        ingredients_steps.reverse();
-
-        (base_ingredients, ingredients_steps)
-    }
 }
 
 #[derive(Clone)]

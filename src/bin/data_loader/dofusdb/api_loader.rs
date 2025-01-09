@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::mpsc::Sender};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::mpsc::Sender,
+};
 
 use const_format::formatcp;
 use diesel::{
@@ -7,7 +10,6 @@ use diesel::{
 };
 use egui::{ColorImage, Context};
 use futures::executor::block_on;
-use image::ImageFormat;
 use itertools::Itertools;
 use reqwest::Client;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
@@ -17,14 +19,16 @@ use serde_json::{from_str, from_value};
 use crate::{
     data_loader::{data_loader::DataLoader, dofusdb::dto::item_dto::ItemDto},
     database::models::{
+        drop::Drop,
         item::{Item, ItemList},
         map::Map,
         monster::Monster,
+        monster_sub_area::MonsterSubArea,
         sub_area::SubArea,
         user_ingredient::UserIngredient,
         user_item::UserItem,
     },
-    gui::image::Image,
+    gui::{image::Image, main_window::Ingredients},
 };
 
 use super::{
@@ -264,6 +268,59 @@ impl DataLoader for ApiLoader {
             let image = Image::new(handle, true);
             tx.send((monster, image)).unwrap();
             ctx.request_repaint();
+        });
+    }
+
+    fn load_recipe_of_item(&self, tx: Sender<Ingredients>, item: Item, quantity: i16) {
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            use crate::database::schema::*;
+            use diesel::prelude::*;
+
+            let mut connection = pool.get().unwrap();
+
+            let mut result_hash_map = HashMap::new();
+
+            let (base_ingredients, ingredients_steps) = item.get_full_recipe(&1, &mut connection);
+
+            base_ingredients.iter().for_each(|(ingredient, quantity)| {
+                let result: Vec<(SubArea, MonsterSubArea, Monster, Drop, Item)> = sub_areas::table
+                    .inner_join(
+                        monsters_sub_areas::table
+                            .on(sub_areas::id.eq(monsters_sub_areas::sub_area_id)),
+                    )
+                    .inner_join(monsters::table.on(monsters_sub_areas::monster_id.eq(monsters::id)))
+                    .inner_join(drops::table.on(monsters::id.eq(drops::monster_id)))
+                    .inner_join(items::table.on(drops::item_id.eq(items::id)))
+                    .filter(items::id.eq(ingredient.id))
+                    .load(&mut connection)
+                    .unwrap();
+
+                result_hash_map.insert(ingredient.clone(), (*quantity, Default::default()));
+                let mut sub_areas_for_monsters: HashMap<Monster, HashSet<SubArea>> = HashMap::new();
+
+                result.into_iter().for_each(|(sub_area, _, monster, _, _)| {
+                    sub_areas_for_monsters
+                        .entry(monster)
+                        .and_modify(|sub_areas| {
+                            sub_areas.insert(sub_area.clone());
+                        })
+                        .or_insert_with(|| {
+                            let mut sub_areas = HashSet::new();
+                            sub_areas.insert(sub_area);
+                            sub_areas
+                        });
+                });
+
+                result_hash_map
+                    .entry((*ingredient).clone())
+                    .and_modify(|(_, monsters)| {
+                        *monsters = sub_areas_for_monsters;
+                    });
+            });
+
+            tx.send((item, quantity, result_hash_map, ingredients_steps))
+                .unwrap();
         });
     }
 }
